@@ -14,7 +14,12 @@ class DashboardScreen:
         self.on_logout = on_logout
         self.current_key = None
         self.current_config = None
-        self.table_column = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
+        self.rows_cache = []
+        self.filter_inputs = {}
+        self.stats_section = ft.Container()
+        self.filters_section = ft.Container()
+        self.rows_section = ft.Container(expand=True)
+        self.content_column = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO, spacing=18)
         self.feedback = ft.Text("", color=COLORS["text_soft"], size=12)
 
     def build(self, route: str):
@@ -22,30 +27,41 @@ class DashboardScreen:
         requested_key = parts[0] if parts else self.entities[0]["key"]
         self.current_config = self._config_for(requested_key) or self.entities[0]
         self.current_key = self.current_config["key"]
+        self.content_column.controls = [
+            self.stats_section,
+            self.filters_section,
+            self.rows_section,
+        ]
         self._refresh_table()
 
         shell = ft.Container(
             expand=True,
-            bgcolor=COLORS["bg_app"],
-            content=ft.Row(
+            gradient=ft.LinearGradient(
+                begin=ft.Alignment(-1, -1),
+                end=ft.Alignment(1, 1),
+                colors=[COLORS["bg_app"], COLORS["bg_deep"], COLORS["bg_panel"]],
+            ),
+            content=ft.ResponsiveRow(
                 [
-                    self._sidebar(),
+                    ft.Container(self._sidebar(), col={"sm": 12, "md": 4, "lg": 3, "xl": 3}),
                     ft.Container(
-                        expand=True,
-                        padding=24,
+                        padding=20,
+                        col={"sm": 12, "md": 8, "lg": 9, "xl": 9},
                         content=ft.Column(
                             [
                                 self._header(),
                                 self.feedback,
-                                self.table_column,
+                                self.content_column,
                             ],
                             expand=True,
-                            spacing=18,
+                            spacing=16,
                         ),
                     ),
                 ],
-                expand=True,
+                columns=12,
                 spacing=0,
+                run_spacing=0,
+                expand=True,
             ),
         )
 
@@ -62,23 +78,35 @@ class DashboardScreen:
             active = entity["key"] == self.current_key
             items.append(
                 ft.Container(
-                    border_radius=12,
-                    bgcolor=COLORS["accent_soft"] if active else "transparent",
+                    border_radius=16,
+                    bgcolor=COLORS["accent_soft"] if active else COLORS["glass"],
+                    border=ft.border.all(1, COLORS["border"]),
                     padding=ft.padding.symmetric(horizontal=14, vertical=12),
                     ink=True,
                     on_click=lambda e, key=entity["key"]: self.page.go(f"/{key}"),
                     content=ft.Row(
                         [
                             ft.Icon(
-                                self._icon_for(entity["key"]),
+                                self._icon_for(entity),
                                 color=COLORS["text_main"] if active else COLORS["text_soft"],
                                 size=18,
                             ),
-                            ft.Text(
-                                entity["title"],
-                                color=COLORS["text_main"] if active else COLORS["text_soft"],
-                                size=14,
-                                weight=ft.FontWeight.W_600 if active else ft.FontWeight.W_400,
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        entity["title"],
+                                        color=COLORS["text_main"] if active else COLORS["text_soft"],
+                                        size=14,
+                                        weight=ft.FontWeight.W_600,
+                                    ),
+                                    ft.Text(
+                                        entity.get("tagline", ""),
+                                        color=COLORS["text_muted"],
+                                        size=10,
+                                    ),
+                                ],
+                                spacing=2,
+                                expand=True,
                             ),
                         ],
                         spacing=10,
@@ -87,35 +115,36 @@ class DashboardScreen:
             )
 
         return ft.Container(
-            width=260,
-            padding=24,
+            expand=True,
             bgcolor=COLORS["bg_panel"],
             border=ft.border.only(right=ft.BorderSide(1, COLORS["border"])),
+            padding=24,
             content=ft.Column(
                 [
                     ft.Text("ManagerPene", size=24, weight=ft.FontWeight.BOLD, color=COLORS["text_main"]),
-                    ft.Text("GenMan API client", size=12, color=COLORS["text_soft"]),
-                    ft.Container(height=12),
+                    ft.Text("Operacion multi-sucursal para GenMan", size=12, color=COLORS["text_soft"]),
                     ft.Container(
-                        padding=16,
-                        border_radius=14,
-                        bgcolor=COLORS["glass"],
-                        border=ft.border.all(1, COLORS["border"]),
-                        content=ft.Column(
-                            [
-                                ft.Text(self.user.get("nombre", "-"), color=COLORS["text_main"], size=16, weight=ft.FontWeight.W_600),
-                                ft.Text(self.user.get("email", "-"), color=COLORS["text_soft"], size=12),
-                                ft.Text(
-                                    f"{self.user.get('roll', '-')}",
-                                    color=COLORS["text_muted"],
-                                    size=11,
-                                ),
-                            ],
-                            spacing=4,
+                        margin=ft.margin.only(top=12, bottom=12),
+                        content=panel(
+                            ft.Column(
+                                [
+                                    ft.Text("Sesion activa", color=COLORS["text_muted"], size=11),
+                                    ft.Text(self.user.get("nombre", "-"), color=COLORS["text_main"], size=18, weight=ft.FontWeight.W_600),
+                                    ft.Text(self.user.get("email", "-"), color=COLORS["text_soft"], size=12),
+                                    ft.Text(
+                                        f"Rol: {self.user.get('roll', '-')}",
+                                        color=COLORS["accent"],
+                                        size=12,
+                                        weight=ft.FontWeight.W_600,
+                                    ),
+                                ],
+                                spacing=4,
+                            ),
+                            padding=18,
                         ),
                     ),
-                    ft.Container(height=12),
-                    ft.Column(items, spacing=8, expand=True, scroll=ft.ScrollMode.AUTO),
+                    ft.Text("Modulos", color=COLORS["text_soft"], size=12),
+                    ft.Column(items, spacing=10, expand=True, scroll=ft.ScrollMode.AUTO),
                     ft.OutlinedButton(
                         "Cerrar sesion",
                         icon=ft.Icons.LOGOUT,
@@ -123,12 +152,13 @@ class DashboardScreen:
                         style=ft.ButtonStyle(
                             color=COLORS["text_soft"],
                             side=ft.BorderSide(1, COLORS["border"]),
-                            shape=ft.RoundedRectangleBorder(radius=12),
+                            shape=ft.RoundedRectangleBorder(radius=14),
                         ),
-                        height=42,
+                        height=46,
                     ),
                 ],
                 expand=True,
+                spacing=8,
             ),
         )
 
@@ -140,7 +170,7 @@ class DashboardScreen:
                 icon=ft.Icons.ADD,
                 on_click=lambda e: self._open_form(),
                 style=button_style("primary"),
-                height=42,
+                height=44,
             ),
             ft.OutlinedButton(
                 "Recargar",
@@ -149,9 +179,9 @@ class DashboardScreen:
                 style=ft.ButtonStyle(
                     color=COLORS["text_soft"],
                     side=ft.BorderSide(1, COLORS["border"]),
-                    shape=ft.RoundedRectangleBorder(radius=12),
+                    shape=ft.RoundedRectangleBorder(radius=14),
                 ),
-                height=42,
+                height=44,
             ),
         ]
 
@@ -161,38 +191,44 @@ class DashboardScreen:
                     ft.ElevatedButton(
                         "Venta desde pedido",
                         icon=ft.Icons.POINT_OF_SALE,
-                        on_click=lambda e: self._open_pedido_to_venta(False),
+                        on_click=lambda e: self._open_pedido_to_venta(),
                         style=button_style("accent"),
-                        height=42,
-                    )
-                )
-            if action == "from_pedido_stock":
-                actions.append(
-                    ft.ElevatedButton(
-                        "Venta desde pedido con stock",
-                        icon=ft.Icons.INVENTORY_2,
-                        on_click=lambda e: self._open_pedido_to_venta(True),
-                        style=button_style("success"),
-                        height=42,
+                        height=44,
                     )
                 )
 
-        return ft.Row(
-            [
-                ft.Column(
-                    [
-                        ft.Text(config["title"], size=30, weight=ft.FontWeight.BOLD, color=COLORS["text_main"]),
-                        ft.Text(
-                            f"Base URL: {self.api.base_url}",
-                            size=12,
-                            color=COLORS["text_soft"],
+        return panel(
+            ft.ResponsiveRow(
+                [
+                    ft.Container(
+                        col={"sm": 12, "lg": 6},
+                        content=ft.Column(
+                            [
+                                ft.Text(config["title"], size=30, weight=ft.FontWeight.BOLD, color=COLORS["text_main"]),
+                                ft.Text(config.get("tagline", ""), size=13, color=COLORS["text_soft"]),
+                                ft.Text(
+                                    f"API: {self.api.base_url}",
+                                    size=11,
+                                    color=COLORS["text_muted"],
+                                ),
+                            ],
+                            spacing=4,
                         ),
-                    ],
-                    spacing=2,
-                ),
-                ft.Row(actions, spacing=10, wrap=True),
-            ],
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Container(
+                        col={"sm": 12, "lg": 6},
+                        content=ft.Row(
+                            actions,
+                            wrap=True,
+                            alignment=ft.MainAxisAlignment.END,
+                            spacing=10,
+                            run_spacing=10,
+                        ),
+                    ),
+                ],
+                columns=12,
+            ),
+            padding=24,
         )
 
     def _refresh_table(self):
@@ -201,118 +237,297 @@ class DashboardScreen:
         except ApiError as exc:
             self.feedback.value = str(exc)
             self.feedback.color = COLORS["danger"]
-            self.table_column.controls = [self._empty_state("No se pudo cargar la entidad.")]
+            self.stats_section.content = None
+            self.filters_section.content = None
+            self.rows_section.content = self._empty_state("No se pudo cargar la entidad.")
             self.page.update()
             return
 
         if not isinstance(rows, list):
             rows = [rows]
 
-        self.feedback.value = f"{len(rows)} registro(s) cargados"
+        self.rows_cache = rows
+        self._ensure_filter_inputs()
+        self._render_rows()
+
+    def _render_rows(self):
+        rows = self._apply_filters(self.rows_cache)
+        self.feedback.value = f"{len(rows)} registro(s) visibles"
         self.feedback.color = COLORS["text_soft"]
 
-        self.table_column.controls = [
-            panel(
-                ft.Column(
-                    [
-                        self._stats_strip(rows),
-                        self._build_table(rows),
-                    ],
-                    spacing=16,
-                ),
-                expand=True,
-            )
-        ]
+        self.stats_section.content = self._build_stats_strip(rows)
+        if self.filters_section.content is None:
+            self.filters_section.content = self._build_filter_panel()
+        self.rows_section.content = self._build_rows_panel(rows)
         self.page.update()
 
-    def _stats_strip(self, rows: list[dict]):
+    def _build_stats_strip(self, rows: list[dict]):
+        summary_fields = self.current_config.get("summary_fields") or self.current_config["table_columns"][:3]
         first = rows[0] if rows else {}
-        summary_keys = self.current_config["table_columns"][:3]
-        cards = [self._stat_card("Registros", str(len(rows)))]
-        for key in summary_keys:
-            cards.append(self._stat_card(key, str(first.get(key, "-")) if first else "-"))
-        return ft.ResponsiveRow(cards)
+        cards = [self._stat_card("Registros", str(len(rows)), COLORS["accent"])]
+        for key in summary_fields[:3]:
+            cards.append(self._stat_card(self._field_label(key), self._format_value(first.get(key)) if first else "-", COLORS["primary"]))
+        return ft.ResponsiveRow(cards, columns=12, run_spacing=12)
 
-    def _stat_card(self, label: str, value: str):
+    def _stat_card(self, label: str, value: str, accent: str):
         return ft.Container(
-            col={"sm": 12, "md": 3},
-            padding=14,
-            border_radius=14,
-            bgcolor=COLORS["bg_panel"],
+            col={"sm": 12, "md": 6, "lg": 3},
+            padding=16,
+            border_radius=18,
+            gradient=ft.LinearGradient(
+                begin=ft.Alignment(-1, -1),
+                end=ft.Alignment(1, 1),
+                colors=[COLORS["bg_panel"], COLORS["bg_deep"]],
+            ),
             border=ft.border.all(1, COLORS["border"]),
             content=ft.Column(
                 [
                     ft.Text(label, color=COLORS["text_soft"], size=11),
-                    ft.Text(value, color=COLORS["text_main"], size=16, weight=ft.FontWeight.W_600),
+                    ft.Text(value, color=COLORS["text_main"], size=17, weight=ft.FontWeight.W_700),
+                    ft.Container(height=4, bgcolor=accent, border_radius=99),
                 ],
-                spacing=6,
+                spacing=8,
             ),
         )
 
-    def _build_table(self, rows: list[dict]):
-        if not rows:
-            return self._empty_state("Todavia no hay registros para este modulo.")
+    def _ensure_filter_inputs(self):
+        expected_keys = [filter_config["key"] for filter_config in self.current_config.get("filters", [])]
+        if list(self.filter_inputs.keys()) == expected_keys:
+            return
 
-        columns = self.current_config["table_columns"]
-        header_cells = [ft.DataColumn(ft.Text(col, color=COLORS["text_main"])) for col in columns]
-        header_cells.append(ft.DataColumn(ft.Text("Acciones", color=COLORS["text_main"])))
-
-        data_rows = []
-        for row in rows:
-            cells = [
-                ft.DataCell(
-                    ft.Text(
-                        self._format_value(row.get(column)),
-                        color=COLORS["text_main"],
-                        size=12,
-                    )
+        inputs = {}
+        for filter_config in self.current_config.get("filters", []):
+            filter_type = filter_config["type"]
+            if filter_type == "select":
+                control = ft.Dropdown(
+                    label=filter_config["label"],
+                    options=[ft.dropdown.Option(option) for option in filter_config["options"]],
+                    **input_style(as_dropdown=True),
                 )
-                for column in columns
-            ]
-            cells.append(ft.DataCell(self._row_actions(row)))
-            data_rows.append(ft.DataRow(cells=cells))
+                control.on_change = lambda e: self._render_rows()
+            else:
+                control = ft.TextField(
+                    label=filter_config["label"],
+                    on_change=lambda e: self._render_rows(),
+                    **input_style(),
+                )
+            inputs[filter_config["key"]] = {"config": filter_config, "control": control}
+        self.filter_inputs = inputs
+        self.filters_section.content = self._build_filter_panel()
 
-        return ft.DataTable(
-            columns=header_cells,
-            rows=data_rows,
-            border=ft.border.all(1, COLORS["border"]),
-            border_radius=12,
-            heading_row_color=COLORS["accent_soft"],
-            data_row_color={"hovered": COLORS["row_hover"]},
-            column_spacing=24,
+    def _build_filter_panel(self):
+        if not self.filter_inputs:
+            return panel(
+                ft.Text("Este modulo no tiene filtros configurados.", color=COLORS["text_soft"], size=12),
+                padding=18,
+            )
+
+        controls = []
+        for key, entry in self.filter_inputs.items():
+            control = entry["control"]
+            controls.append(ft.Container(control, col={"sm": 12, "md": 6, "lg": 3}))
+
+        clear_button = ft.OutlinedButton(
+            "Limpiar filtros",
+            icon=ft.Icons.FILTER_ALT_OFF,
+            on_click=lambda e: self._clear_filters(),
+            style=ft.ButtonStyle(
+                color=COLORS["text_soft"],
+                side=ft.BorderSide(1, COLORS["border"]),
+                shape=ft.RoundedRectangleBorder(radius=14),
+            ),
+            height=44,
         )
 
-    def _row_actions(self, row: dict):
-        controls = [
-            ft.IconButton(
-                icon=ft.Icons.EDIT,
-                icon_color=COLORS["warning"],
-                tooltip="Editar",
-                on_click=lambda e, item=row: self._open_form(item),
+        return panel(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text("Filtros", color=COLORS["text_main"], size=16, weight=ft.FontWeight.W_600),
+                            clear_button,
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.ResponsiveRow(controls, columns=12, run_spacing=12),
+                ],
+                spacing=14,
             ),
-            ft.IconButton(
+            padding=20,
+        )
+
+    def _build_rows_panel(self, rows: list[dict]):
+        if not rows:
+            return panel(self._empty_state("No hay resultados con los filtros actuales."), padding=20)
+
+        cards = []
+        for row in rows:
+            cards.append(ft.Container(self._build_record_card(row), col={"sm": 12, "lg": 6, "xl": 4}))
+        return ft.ResponsiveRow(cards, columns=12, run_spacing=14)
+
+    def _build_record_card(self, row: dict):
+        details = []
+        for key in self.current_config.get("summary_fields") or self.current_config["table_columns"]:
+            if key == "id":
+                continue
+            details.append(
+                ft.Container(
+                    padding=ft.padding.symmetric(vertical=6),
+                    border=ft.border.only(bottom=ft.BorderSide(1, COLORS["border"])),
+                    content=ft.Row(
+                        [
+                            ft.Text(self._field_label(key), color=COLORS["text_soft"], size=11, expand=True),
+                            ft.Text(self._format_value(row.get(key)), color=COLORS["text_main"], size=12, text_align=ft.TextAlign.RIGHT),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                )
+            )
+
+        relation_block = self._build_relation_preview(row) if self.current_config.get("relation") else None
+
+        action_row = ft.Row(
+            self._record_actions(row),
+            wrap=True,
+            spacing=6,
+            run_spacing=6,
+        )
+
+        return panel(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Container(
+                                width=40,
+                                height=40,
+                                border_radius=14,
+                                bgcolor=COLORS["accent_soft"],
+                                alignment=ft.Alignment(0, 0),
+                                content=ft.Icon(self._icon_for(self.current_config), color=COLORS["accent"]),
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        self._record_title(row),
+                                        color=COLORS["text_main"],
+                                        size=16,
+                                        weight=ft.FontWeight.W_700,
+                                    ),
+                                    ft.Text(
+                                        self.current_config.get("singular_title", self.current_config["title"]),
+                                        color=COLORS["text_muted"],
+                                        size=11,
+                                    ),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                        ],
+                        spacing=10,
+                    ),
+                    ft.Column(details, spacing=0),
+                    *( [relation_block] if relation_block else [] ),
+                    action_row,
+                ],
+                spacing=14,
+            ),
+            padding=18,
+        )
+
+    def _record_actions(self, row: dict):
+        controls = [
+            ft.OutlinedButton(
+                "Editar",
+                icon=ft.Icons.EDIT,
+                on_click=lambda e, item=row: self._open_form(item),
+                style=ft.ButtonStyle(
+                    color=COLORS["warning"],
+                    side=ft.BorderSide(1, COLORS["warning"]),
+                    shape=ft.RoundedRectangleBorder(radius=12),
+                ),
+            ),
+            ft.OutlinedButton(
+                "Eliminar",
                 icon=ft.Icons.DELETE_OUTLINE,
-                icon_color=COLORS["danger"],
-                tooltip="Eliminar",
                 on_click=lambda e, item=row: self._confirm_delete(item),
+                style=ft.ButtonStyle(
+                    color=COLORS["danger"],
+                    side=ft.BorderSide(1, COLORS["danger"]),
+                    shape=ft.RoundedRectangleBorder(radius=12),
+                ),
             ),
         ]
 
         if "backfill" in self.current_config.get("extra_actions", []):
             controls.append(
-                ft.IconButton(
+                ft.ElevatedButton(
+                    "Backfill",
                     icon=ft.Icons.PUBLISHED_WITH_CHANGES,
-                    icon_color=COLORS["success"],
-                    tooltip="Backfill",
                     on_click=lambda e, item=row: self._run_backfill(item),
+                    style=button_style("success"),
                 )
             )
+        return controls
 
-        return ft.Row(controls, spacing=0, wrap=True)
+    def _build_relation_preview(self, row: dict):
+        relation = self.current_config["relation"]
+        relation_items = []
+        error_text = ft.Text("", color=COLORS["danger"], size=11)
+
+        try:
+            relation_items = self.api.get(relation["list_path"].format(id=row["id"])) or []
+        except ApiError as exc:
+            error_text.value = str(exc)
+
+        content = []
+        if relation_items:
+            for relation_item in relation_items[:4]:
+                content.append(
+                    ft.Container(
+                        padding=10,
+                        border_radius=12,
+                        bgcolor=COLORS["bg_app"],
+                        border=ft.border.all(1, COLORS["border"]),
+                        content=ft.Row(
+                            [
+                                ft.Text(self._related_label_from_relation_item(relation_item), color=COLORS["text_main"], size=12, expand=True),
+                                ft.Text(
+                                    f"x {self._extract_related_quantity(relation_item):.2f}",
+                                    color=COLORS["accent"],
+                                    size=11,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        ),
+                    )
+                )
+            if len(relation_items) > 4:
+                content.append(ft.Text(f"+ {len(relation_items) - 4} relacion(es) mas", color=COLORS["text_muted"], size=11))
+        else:
+            content.append(ft.Text(relation.get("empty_text", "Sin relaciones."), color=COLORS["text_soft"], size=11))
+
+        if error_text.value:
+            content.append(error_text)
+
+        return ft.Container(
+            padding=14,
+            border_radius=14,
+            bgcolor=COLORS["glass"],
+            border=ft.border.all(1, COLORS["border"]),
+            content=ft.Column(
+                [
+                    ft.Text(relation["title"], color=COLORS["text_main"], size=13, weight=ft.FontWeight.W_600),
+                    *content,
+                ],
+                spacing=8,
+            ),
+        )
 
     def _open_form(self, item: dict | None = None):
         is_edit = item is not None
-        title = f"{'Editar' if is_edit else 'Nuevo'} {self.current_config['title']}"
+        title = f"{'Editar' if is_edit else 'Nuevo'} {self.current_config.get('singular_title', self.current_config['title'])}"
         controls = []
         inputs = {}
 
@@ -335,13 +550,17 @@ class DashboardScreen:
                     ft.Divider(color=COLORS["border"]),
                     ft.Text("Relaciones", color=COLORS["text_main"], size=18, weight=ft.FontWeight.W_600),
                     ft.Text(
-                        "Selecciona los elementos relacionados y su cantidad desde este formulario.",
+                        "Las relaciones se gestionan desde la entidad principal, como pide el flujo del proyecto.",
                         color=COLORS["text_soft"],
                         size=12,
                     ),
                     relation_state["view"],
                 ]
             )
+
+        self._configure_totals(inputs, relation_state, item)
+
+        form_error = ft.Text("", size=12, color=COLORS["danger"])
 
         def submit(_):
             try:
@@ -356,22 +575,21 @@ class DashboardScreen:
                 self.feedback.color = COLORS["success"]
                 dlg.open = False
                 self._refresh_table()
-            except ApiError as exc:
+            except Exception as exc:
                 form_error.value = str(exc)
                 self.page.update()
 
-        form_error = ft.Text("", size=12, color=COLORS["danger"])
         dlg = ft.AlertDialog(
             modal=True,
             bgcolor=COLORS["bg_panel"],
             title=ft.Text(title, color=COLORS["text_main"]),
             content=ft.Container(
-                width=520,
+                width=640,
                 content=ft.Column(
                     controls + [form_error],
                     tight=True,
                     scroll=ft.ScrollMode.AUTO,
-                    height=460,
+                    height=520,
                 ),
             ),
             actions=[
@@ -382,11 +600,6 @@ class DashboardScreen:
         self.page.show_dialog(dlg)
 
     def _confirm_delete(self, item: dict):
-        message = ft.Text(
-            "Se eliminara este registro.",
-            color=COLORS["text_soft"],
-        )
-
         def remove(_):
             try:
                 self.api.delete(f"{self.current_config['endpoint']}/{item['id']}")
@@ -404,7 +617,10 @@ class DashboardScreen:
             modal=True,
             bgcolor=COLORS["bg_panel"],
             title=ft.Text("Confirmar eliminacion", color=COLORS["text_main"]),
-            content=message,
+            content=ft.Text(
+                "Se eliminara este registro de la sucursal actual.",
+                color=COLORS["text_soft"],
+            ),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: self._close_dialog(dlg)),
                 ft.ElevatedButton("Eliminar", on_click=remove, style=button_style("danger")),
@@ -423,17 +639,77 @@ class DashboardScreen:
             self.feedback.color = COLORS["danger"]
             self.page.update()
 
-    def _open_pedido_to_venta(self, with_stock: bool):
-        pedido_id = ft.TextField(label="Pedido", **input_style())
+    def _open_pedido_to_venta(self):
         error = ft.Text("", size=12, color=COLORS["danger"])
+        affect_stock = ft.Switch(
+            label="Afectar stock",
+            value=True,
+            active_color=COLORS["success"],
+        )
+        selected_state = {"pedido_id": None}
+        try:
+            pedidos = self.api.get("/apiManGen/Pedidos") or []
+        except Exception as exc:
+            self.feedback.value = str(exc)
+            self.feedback.color = COLORS["danger"]
+            self.page.update()
+            return
+        list_column = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, height=280)
+
+        def select_pedido(pedido_id: int):
+            selected_state["pedido_id"] = pedido_id
+            render_pedidos()
+
+        def render_pedidos():
+            cards = []
+            for pedido in pedidos:
+                pedido_id = pedido.get("id")
+                active = pedido_id == selected_state["pedido_id"]
+                cards.append(
+                    ft.Container(
+                        padding=14,
+                        border_radius=14,
+                        bgcolor=COLORS["accent_soft"] if active else COLORS["bg_app"],
+                        border=ft.border.all(1, COLORS["accent"] if active else COLORS["border"]),
+                        ink=True,
+                        on_click=lambda e, pid=pedido_id: select_pedido(pid),
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    self._record_title(pedido),
+                                    color=COLORS["text_main"],
+                                    size=14,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                ft.Text(
+                                    f"Estado: {pedido.get('estado', '-')}",
+                                    color=COLORS["text_soft"],
+                                    size=11,
+                                ),
+                                ft.Text(
+                                    f"Total: {self._format_value(pedido.get('total'))}",
+                                    color=COLORS["text_soft"],
+                                    size=11,
+                                ),
+                            ],
+                            spacing=4,
+                        ),
+                    )
+                )
+            if not cards:
+                cards = [self._empty_state("No hay pedidos disponibles para convertir en venta.")]
+            list_column.controls = cards
 
         def submit(_):
             try:
-                path = f"/apiManGen/Ventas/desde-pedido/{int(pedido_id.value)}"
-                if with_stock:
+                pedido_id = selected_state["pedido_id"]
+                if pedido_id is None:
+                    raise ApiError("Selecciona un pedido.")
+                path = f"/apiManGen/Ventas/desde-pedido/{pedido_id}"
+                if affect_stock.value:
                     path += "/con-stock"
                 self.api.post(path)
-                self.feedback.value = "Venta creada desde pedido."
+                self.feedback.value = "Venta creada desde pedido correctamente."
                 self.feedback.color = COLORS["success"]
                 dlg.open = False
                 self._refresh_table()
@@ -441,17 +717,31 @@ class DashboardScreen:
                 error.value = str(exc)
                 self.page.update()
 
+        render_pedidos()
         dlg = ft.AlertDialog(
             modal=True,
             bgcolor=COLORS["bg_panel"],
             title=ft.Text("Generar venta desde pedido", color=COLORS["text_main"]),
             content=ft.Container(
-                width=420,
-                content=ft.Column([pedido_id, error], tight=True),
+                width=540,
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "Selecciona un pedido. La venta impacta stock por defecto y el pedido pasara a Terminado.",
+                            color=COLORS["text_soft"],
+                            size=12,
+                        ),
+                        affect_stock,
+                        list_column,
+                        error,
+                    ],
+                    tight=True,
+                    spacing=12,
+                ),
             ),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: self._close_dialog(dlg)),
-                ft.ElevatedButton("Crear", on_click=submit, style=button_style("primary")),
+                ft.ElevatedButton("Crear venta", on_click=submit, style=button_style("primary")),
             ],
         )
         self.page.show_dialog(dlg)
@@ -466,7 +756,7 @@ class DashboardScreen:
                     if field.get("required"):
                         raise ApiError(f"El campo {field['label']} es obligatorio.")
                     continue
-                value = float(value)
+                value = self._parse_number(value, field["label"])
             elif isinstance(value, str):
                 value = value.strip()
 
@@ -527,6 +817,8 @@ class DashboardScreen:
             **input_style(),
         )
 
+        state = {"selected": selected}
+
         def on_change(event):
             value = event.control.value
             if isinstance(value, date) and not isinstance(value, datetime):
@@ -552,18 +844,9 @@ class DashboardScreen:
             on_change=on_change,
         )
 
-        state = {"selected": selected, "picker": picker}
-
         def open_picker(_):
             self.page.show_dialog(picker)
 
-        open_button = ft.IconButton(
-            icon=ft.Icons.CALENDAR_MONTH,
-            icon_color=COLORS["accent"],
-            tooltip="Seleccionar fecha",
-            on_click=open_picker,
-            disabled=field.get("auto_now_local_on_create") and not is_edit,
-        )
         helper_text = None
         if field.get("auto_now_local_on_create") and not is_edit:
             helper_text = ft.Text(
@@ -574,7 +857,19 @@ class DashboardScreen:
 
         view = ft.Column(
             [
-                ft.Row([ft.Container(content=text_field, expand=True), open_button], vertical_alignment=ft.CrossAxisAlignment.END),
+                ft.Row(
+                    [
+                        ft.Container(content=text_field, expand=True),
+                        ft.IconButton(
+                            icon=ft.Icons.CALENDAR_MONTH,
+                            icon_color=COLORS["accent"],
+                            tooltip="Seleccionar fecha",
+                            on_click=open_picker,
+                            disabled=field.get("auto_now_local_on_create") and not is_edit,
+                        ),
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.END,
+                ),
                 *([helper_text] if helper_text else []),
             ],
             spacing=6,
@@ -596,7 +891,11 @@ class DashboardScreen:
             related_id = related.get("id")
             if related_id is None:
                 continue
-            option_map[str(related_id)] = self._related_label_from_row(related)
+            option_map[str(related_id)] = {
+                "label": self._related_label_from_row(related),
+                "price": self._coerce_float(related.get(relation.get("price_field", "precio"))),
+                "row": related,
+            }
 
         dropdown = ft.Dropdown(
             label="Entidad relacionada",
@@ -639,6 +938,7 @@ class DashboardScreen:
             "selected_items": selected_items,
             "use_stock": use_stock,
             "editing_related_id": None,
+            "on_change": None,
         }
 
         def set_editing(related_id: int | None):
@@ -681,6 +981,11 @@ class DashboardScreen:
                                                 color=COLORS["text_soft"],
                                                 size=11,
                                             ),
+                                            ft.Text(
+                                                f"Unitario: {self._format_value(related_item.get('unit_price'))}",
+                                                color=COLORS["text_muted"],
+                                                size=11,
+                                            ),
                                         ],
                                         spacing=2,
                                         expand=True,
@@ -702,6 +1007,8 @@ class DashboardScreen:
                         )
                     )
                 list_column.controls = cards
+            if callable(state.get("on_change")):
+                state["on_change"]()
             self.page.update()
 
         def remove_selected(related_id):
@@ -726,12 +1033,13 @@ class DashboardScreen:
             try:
                 if not dropdown.value:
                     raise ApiError("Selecciona una entidad relacionada.")
-                quantity = float(quantity_field.value)
+                quantity = self._parse_number(quantity_field.value, "Cantidad")
                 if quantity <= 0:
                     raise ApiError("La cantidad debe ser mayor a cero.")
 
                 related_id = int(dropdown.value)
-                label = option_map.get(dropdown.value, "Relacion")
+                option = option_map.get(dropdown.value, {"label": "Relacion", "price": 0.0})
+                label = option["label"]
 
                 if item is not None:
                     self._save_existing_relation(
@@ -744,7 +1052,11 @@ class DashboardScreen:
                     )
                     self._load_existing_relations(state, option_map)
                 else:
-                    selected_items[related_id] = {"label": label, "cantidad": quantity}
+                    selected_items[related_id] = {
+                        "label": label,
+                        "cantidad": quantity,
+                        "unit_price": option.get("price", 0.0),
+                    }
 
                 error_text.value = ""
                 set_editing(None)
@@ -807,9 +1119,17 @@ class DashboardScreen:
             related_id = self._extract_related_id(related_item, relation["payload_id_key"])
             if related_id is None:
                 continue
-            label = option_map.get(str(related_id)) or self._related_label_from_relation_item(related_item)
+            option = option_map.get(str(related_id), {})
+            label = option.get("label") or self._related_label_from_relation_item(related_item)
             quantity = self._extract_related_quantity(related_item)
-            state["selected_items"][related_id] = {"label": label, "cantidad": quantity}
+            unit_price = option.get("price")
+            if unit_price in (None, 0.0):
+                unit_price = self._extract_related_price(related_item, relation.get("price_field", "precio"))
+            state["selected_items"][related_id] = {
+                "label": label,
+                "cantidad": quantity,
+                "unit_price": unit_price,
+            }
 
     def _save_existing_relation(self, relation: dict, item: dict, related_id: int, quantity: float, use_stock: bool, already_exists: bool):
         if already_exists:
@@ -827,15 +1147,144 @@ class DashboardScreen:
         create_path = relation.get("create_path_stock") if use_stock else relation["create_path"]
         self.api.post(create_path.format(id=item["id"]), payload)
 
+    def _configure_totals(self, inputs: dict, relation_state: dict | None, item: dict | None):
+        if self.current_key not in {"pedidos", "ventas"}:
+            return
+        total_entry = inputs.get("total")
+        total_desc_entry = inputs.get("totalDesc")
+        if not total_entry or not total_desc_entry:
+            return
+
+        total_control = total_entry["control"]
+        total_desc_control = total_desc_entry["control"]
+        state = {
+            "manual_total": False,
+            "manual_total_desc": False,
+        }
+
+        def mark_total_manual(_):
+            state["manual_total"] = True
+
+        def mark_total_desc_manual(_):
+            state["manual_total_desc"] = True
+
+        total_control.on_change = mark_total_manual
+        total_desc_control.on_change = mark_total_desc_manual
+
+        def apply_totals(force: bool = False):
+            calculated = self._calculate_relation_total(relation_state)
+            if calculated is None:
+                return
+            if force or not state["manual_total"] or not total_control.value:
+                total_control.value = self._format_decimal_input(calculated)
+                state["manual_total"] = False
+            if force or not state["manual_total_desc"] or not total_desc_control.value:
+                total_desc_control.value = self._format_decimal_input(calculated)
+                state["manual_total_desc"] = False
+
+        if relation_state is not None:
+            relation_state["on_change"] = lambda: apply_totals(False)
+
+        helper = ft.Row(
+            [
+                ft.Text(
+                    "Los totales se calculan a partir de los productos y luego puedes ajustarlos manualmente.",
+                    color=COLORS["text_soft"],
+                    size=11,
+                    expand=True,
+                ),
+                ft.OutlinedButton(
+                    "Recalcular",
+                    icon=ft.Icons.CALCULATE,
+                    on_click=lambda e: (apply_totals(True), self.page.update()),
+                    style=ft.ButtonStyle(
+                        color=COLORS["accent"],
+                        side=ft.BorderSide(1, COLORS["accent"]),
+                        shape=ft.RoundedRectangleBorder(radius=12),
+                    ),
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
+        total_desc_entry["view"] = ft.Column([total_desc_entry["view"], helper], spacing=8, tight=True)
+
+        if relation_state is not None:
+            apply_totals(True)
+
+    def _calculate_relation_total(self, relation_state: dict | None):
+        if not relation_state:
+            return None
+        total = 0.0
+        has_items = False
+        for related_item in relation_state["selected_items"].values():
+            quantity = self._coerce_float(related_item.get("cantidad"))
+            unit_price = self._coerce_float(related_item.get("unit_price"))
+            total += quantity * unit_price
+            has_items = True
+        return total if has_items else 0.0
+
+    def _parse_number(self, value, label: str):
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            normalized = str(value).strip().replace(",", ".")
+            return float(normalized)
+        except (TypeError, ValueError):
+            raise ApiError(f"El campo {label} debe ser numerico.")
+
+    @staticmethod
+    def _coerce_float(value, default: float = 0.0):
+        try:
+            if value in ("", None):
+                return default
+            return float(str(value).replace(",", "."))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _format_decimal_input(value: float):
+        return f"{value:.2f}"
+
+    def _apply_filters(self, rows: list[dict]):
+        filtered = rows
+        for key, entry in self.filter_inputs.items():
+            raw_value = entry["control"].value
+            if raw_value in (None, ""):
+                continue
+            value = str(raw_value).strip().lower()
+            filter_type = entry["config"]["type"]
+            if filter_type == "date":
+                filtered = [row for row in filtered if value in self._format_value(row.get(key)).lower()]
+            else:
+                filtered = [row for row in filtered if value in str(row.get(key, "")).lower()]
+        return filtered
+
+    def _clear_filters(self):
+        for entry in self.filter_inputs.values():
+            entry["control"].value = None if isinstance(entry["control"], ft.Dropdown) else ""
+        self._render_rows()
+
     def _extract_related_id(self, related_item, payload_id_key: str):
         if isinstance(related_item, dict):
             value = related_item.get(payload_id_key)
             if value is not None:
                 return int(value)
+            for key, candidate in related_item.items():
+                if key.lower().endswith("id") and candidate is not None and not isinstance(candidate, (dict, list)):
+                    try:
+                        return int(candidate)
+                    except (TypeError, ValueError):
+                        pass
             nested_key = payload_id_key[:-2] if payload_id_key.endswith("Id") else payload_id_key
             nested_value = related_item.get(nested_key)
             if isinstance(nested_value, dict) and nested_value.get("id") is not None:
                 return int(nested_value["id"])
+            for value in related_item.values():
+                if isinstance(value, dict) and value.get("id") is not None:
+                    try:
+                        return int(value["id"])
+                    except (TypeError, ValueError):
+                        pass
             if related_item.get("id") is not None and len(related_item.keys()) <= 3:
                 return int(related_item["id"])
         return None
@@ -843,11 +1292,19 @@ class DashboardScreen:
     def _extract_related_quantity(self, related_item):
         if isinstance(related_item, dict):
             value = related_item.get("cantidad", 1)
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return 1.0
+            return self._coerce_float(value, 1.0)
         return 1.0
+
+    def _extract_related_price(self, related_item, price_field: str):
+        if not isinstance(related_item, dict):
+            return 0.0
+        direct_price = related_item.get(price_field)
+        if direct_price not in (None, ""):
+            return self._coerce_float(direct_price)
+        for value in related_item.values():
+            if isinstance(value, dict) and value.get(price_field) not in (None, ""):
+                return self._coerce_float(value.get(price_field))
+        return 0.0
 
     def _related_label_from_row(self, row: dict):
         for key in ("nombre", "descripcion", "email", "metodoPago"):
@@ -867,6 +1324,19 @@ class DashboardScreen:
             if label != "Relacion":
                 return label
         return "Relacion"
+
+    def _record_title(self, row: dict):
+        for key in ("nombre", "descripcion", "email", "metodoPago", "estado"):
+            value = row.get(key)
+            if value:
+                return str(value)
+        return self.current_config.get("singular_title", "Registro")
+
+    def _field_label(self, key: str):
+        for field in self.current_config.get("fields", []):
+            if field["key"] == key:
+                return field["label"]
+        return key.replace("_", " ").title()
 
     def _parse_iso_value(self, value):
         if not value:
@@ -903,17 +1373,17 @@ class DashboardScreen:
             value = datetime.combine(value, time.min, tzinfo=datetime.now().astimezone().tzinfo)
         if value.tzinfo is None:
             value = value.replace(tzinfo=datetime.now().astimezone().tzinfo)
-        if field.get("auto_now_local_on_create"):
-            return value.isoformat(timespec="milliseconds")
-        if field.get("include_time"):
-            return value.isoformat(timespec="milliseconds")
-        return value.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="milliseconds")
+        if not field.get("auto_now_local_on_create") and not field.get("include_time"):
+            value = value.replace(hour=0, minute=0, second=0, microsecond=0)
+        offset = value.strftime("%z")
+        java_offset = f"{offset[:3]}:{offset[3:]}" if offset else "+00:00"
+        return f"{value.strftime('%Y-%m-%dT%H:%M:%S')}.{int(value.microsecond / 1000):03d}{java_offset}"
 
     def _empty_state(self, text: str):
         return ft.Container(
             height=160,
             alignment=ft.Alignment(0, 0),
-            content=ft.Text(text, color=COLORS["text_soft"], size=14),
+            content=ft.Text(text, color=COLORS["text_soft"], size=14, text_align=ft.TextAlign.CENTER),
         )
 
     def _config_for(self, key: str):
@@ -929,18 +1399,11 @@ class DashboardScreen:
             return f"{value:.2f}"
         return str(value)
 
-    def _close_dialog(self, dlg: ft.AlertDialog):
+    def _close_dialog(self, dlg):
         dlg.open = False
         self.page.update()
 
     @staticmethod
-    def _icon_for(key: str):
-        mapping = {
-            "sucursales": ft.Icons.STOREFRONT,
-            "usuarios": ft.Icons.GROUPS,
-            "materias_primas": ft.Icons.SCIENCE,
-            "productos": ft.Icons.INVENTORY_2,
-            "pedidos": ft.Icons.RECEIPT_LONG,
-            "ventas": ft.Icons.POINT_OF_SALE,
-        }
-        return mapping.get(key, ft.Icons.DATA_ARRAY)
+    def _icon_for(config: dict):
+        icon_name = config.get("icon")
+        return getattr(ft.Icons, icon_name, ft.Icons.DATA_ARRAY)

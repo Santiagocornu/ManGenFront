@@ -179,21 +179,14 @@ class LoginScreen:
                 colors=[COLORS["bg_app"], COLORS["bg_panel"], COLORS["bg_deep"]],
             ),
             padding=24,
-            content=ft.Row(
+            content=ft.ResponsiveRow(
                 controls=[
-                    ft.Column(
-                        controls=[
-                            ft.Container(
-                                width=640,
-                                content=panel(
-                                    self._build_workspace(),
-                                    padding=28,
-                                ),
-                            )
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        expand=True,
+                    ft.Container(
+                        col={"sm": 12, "md": 10, "lg": 8, "xl": 6},
+                        content=panel(
+                            self._build_workspace(),
+                            padding=28,
+                        ),
                     )
                 ],
                 alignment=ft.MainAxisAlignment.CENTER,
@@ -217,10 +210,10 @@ class LoginScreen:
                     self.form_container,
                     ft.Divider(color=COLORS["border"], height=20),
                     self._build_navigation_row(),
-                ],
-                spacing=16,
-                alignment=ft.MainAxisAlignment.CENTER,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            ],
+            spacing=16,
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=ft.padding.symmetric(horizontal=16, vertical=8),
         )
@@ -251,7 +244,7 @@ class LoginScreen:
         return ft.Column(
             [
                 ft.Text("Iniciar sesi\u00f3n", size=28, weight=ft.FontWeight.BOLD, color=COLORS["text_main"]),
-                ft.Text("Ingresa con email y contrase\u00f1a.", size=13, color=COLORS["text_soft"]),
+                ft.Text("Ingresa con email y contrase\u00f1a para operar sobre tu propia sucursal.", size=13, color=COLORS["text_soft"]),
                 self.login_email_field,
                 self.login_password_field,
                 self.login_error_text,
@@ -264,7 +257,6 @@ class LoginScreen:
                 ),
             ],
             spacing=16,
-            width=520,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
@@ -286,7 +278,6 @@ class LoginScreen:
                 ),
             ],
             spacing=16,
-            width=520,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
@@ -294,7 +285,7 @@ class LoginScreen:
         return ft.Column(
             [
                 ft.Text("Crear sucursal", size=28, weight=ft.FontWeight.BOLD, color=COLORS["text_main"]),
-                ft.Text("Crea la sucursal y luego vuelve a iniciar sesi\u00f3n.", size=13, color=COLORS["text_soft"]),
+                ft.Text("Crea una nueva sucursal junto con su usuario ADMIN inicial.", size=13, color=COLORS["text_soft"]),
                 self.nombre_sucursal_field,
                 self.nombre_admin_field,
                 self.email_admin_field,
@@ -309,7 +300,6 @@ class LoginScreen:
                 ),
             ],
             spacing=16,
-            width=520,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
 

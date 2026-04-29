@@ -19,8 +19,8 @@ class ManagerPeneApp:
         self.page.padding = 0
         self.page.spacing = 0
         self.page.theme_mode = ft.ThemeMode.DARK
-        self.page.window_min_width = 900
-        self.page.window_min_height = 680
+        self.page.window_min_width = 360
+        self.page.window_min_height = 640
         self.page.scroll = ft.ScrollMode.HIDDEN
         self.page.on_route_change = self._handle_route_change
 
