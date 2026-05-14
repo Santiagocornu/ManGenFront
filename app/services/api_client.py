@@ -7,11 +7,18 @@ from requests.exceptions import Timeout
 
 
 class ApiError(Exception):
-    pass
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class PaymentRequiredError(ApiError):
+    def __init__(self, message: str = "Falta de pago."):
+        super().__init__(message, status_code=402)
 
 
 class ApiClient:
-    DEFAULT_BASE_URL = "http://localhost:8080"
+    DEFAULT_BASE_URL = "http://192.168.100.50:8080"
 
     def __init__(self):
         self.base_url = self.DEFAULT_BASE_URL
@@ -132,6 +139,8 @@ class ApiClient:
             data = response.text
 
         if not response.ok:
+            if response.status_code == 402:
+                raise PaymentRequiredError("Falta de pago.")
             raise ApiError(ApiClient._normalize_error_message(response.status_code, data))
 
         return data
@@ -140,6 +149,8 @@ class ApiClient:
     def _normalize_error_message(status_code: int, data):
         if status_code == 401:
             return "Email o contrase\u00f1a incorrectos."
+        if status_code == 402:
+            return "Falta de pago."
         if status_code == 403:
             return "No tienes permisos para realizar esta acci\u00f3n."
         if status_code == 404:

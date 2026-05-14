@@ -29,10 +29,18 @@ def input_style(as_dropdown: bool = False):
         "focused_border_color": COLORS["accent"],
         "color": COLORS["text_main"],
         "label_style": ft.TextStyle(color=COLORS["text_soft"], size=12),
+        "hint_style": ft.TextStyle(color=COLORS["text_muted"], size=12),
+        "text_size": 13,
+        "border_radius": 14,
         "dense": True,
     }
     if as_dropdown:
-        shared["text_style"] = ft.TextStyle(color=COLORS["text_main"])
+        shared["filled"] = False
+        shared.pop("hint_style", None)
+        shared["text_style"] = ft.TextStyle(color=COLORS["text_main"], size=13)
+        shared["content_padding"] = ft.padding.symmetric(horizontal=12, vertical=12)
+        shared["menu_height"] = 280
+        shared["height"] = 50
     return shared
 
 

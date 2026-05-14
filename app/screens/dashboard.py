@@ -1,7 +1,11 @@
 import flet as ft
 from datetime import date, datetime, time
+import os
+import subprocess
+import tempfile
+from urllib.parse import quote
 
-from app.services.api_client import ApiError
+from app.services.api_client import ApiError, PaymentRequiredError
 from app.ui.theme import COLORS, button_style, input_style, panel
 
 
@@ -15,6 +19,7 @@ class DashboardScreen:
         self.current_key = None
         self.current_config = None
         self.rows_cache = []
+        self.relation_items_cache = {}
         self.filter_inputs = {}
         self.stats_section = ft.Container()
         self.filters_section = ft.Container()
@@ -235,6 +240,8 @@ class DashboardScreen:
         try:
             rows = self.api.get(self.current_config["endpoint"]) or []
         except ApiError as exc:
+            if isinstance(exc, PaymentRequiredError):
+                self._show_payment_required_alert()
             self.feedback.value = str(exc)
             self.feedback.color = COLORS["danger"]
             self.stats_section.content = None
@@ -247,6 +254,7 @@ class DashboardScreen:
             rows = [rows]
 
         self.rows_cache = rows
+        self.relation_items_cache = {}
         self._ensure_filter_inputs()
         self._render_rows()
 
@@ -262,11 +270,22 @@ class DashboardScreen:
         self.page.update()
 
     def _build_stats_strip(self, rows: list[dict]):
-        summary_fields = self.current_config.get("summary_fields") or self.current_config["table_columns"][:3]
-        first = rows[0] if rows else {}
-        cards = [self._stat_card("Registros", str(len(rows)), COLORS["accent"])]
-        for key in summary_fields[:3]:
-            cards.append(self._stat_card(self._field_label(key), self._format_value(first.get(key)) if first else "-", COLORS["primary"]))
+        total_rows = len(self.rows_cache)
+        filtered_rows = len(rows)
+        cards = [
+            self._stat_card("Registros totales", str(total_rows), COLORS["primary"]),
+            self._stat_card("Mostrados", str(filtered_rows), COLORS["accent"]),
+        ]
+
+        if self.current_key in {"ventas", "pedidos"}:
+            total_sum = sum(self._coerce_float(row.get("total")) for row in rows)
+            total_desc_sum = sum(self._coerce_float(row.get("totalDesc")) for row in rows)
+            cards.extend(
+                [
+                    self._stat_card("Total filtrado", self._format_value(total_sum), COLORS["success"]),
+                    self._stat_card("Total desc. filtrado", self._format_value(total_desc_sum), COLORS["warning"]),
+                ]
+            )
         return ft.ResponsiveRow(cards, columns=12, run_spacing=12)
 
     def _stat_card(self, label: str, value: str, accent: str):
@@ -308,6 +327,7 @@ class DashboardScreen:
             else:
                 control = ft.TextField(
                     label=filter_config["label"],
+                    keyboard_type=ft.KeyboardType.NUMBER if filter_type == "number" else ft.KeyboardType.TEXT,
                     on_change=lambda e: self._render_rows(),
                     **input_style(),
                 )
@@ -384,7 +404,10 @@ class DashboardScreen:
                 )
             )
 
-        relation_block = self._build_relation_preview(row) if self.current_config.get("relation") else None
+        relation_blocks = [
+            self._build_relation_preview(row, relation)
+            for relation in self._relations_for_current_config()
+        ]
 
         action_row = ft.Row(
             self._record_actions(row),
@@ -427,7 +450,7 @@ class DashboardScreen:
                         spacing=10,
                     ),
                     ft.Column(details, spacing=0),
-                    *( [relation_block] if relation_block else [] ),
+                    *relation_blocks,
                     action_row,
                 ],
                 spacing=14,
@@ -468,41 +491,40 @@ class DashboardScreen:
                     style=button_style("success"),
                 )
             )
+        if self.current_key == "ventas":
+            controls.append(
+                ft.OutlinedButton(
+                    "Imprimir",
+                    icon=ft.Icons.PRINT_OUTLINED,
+                    on_click=lambda e, item=row: self._open_venta_print(item),
+                    style=ft.ButtonStyle(
+                        color=COLORS["accent"],
+                        side=ft.BorderSide(1, COLORS["accent"]),
+                        shape=ft.RoundedRectangleBorder(radius=12),
+                    ),
+                )
+            )
         return controls
 
-    def _build_relation_preview(self, row: dict):
-        relation = self.current_config["relation"]
+    def _build_relation_preview(self, row: dict, relation: dict):
         relation_items = []
         error_text = ft.Text("", color=COLORS["danger"], size=11)
 
         try:
-            relation_items = self.api.get(relation["list_path"].format(id=row["id"])) or []
+            relation_items = self._get_relation_items(relation, row["id"])
         except ApiError as exc:
             error_text.value = str(exc)
 
         content = []
         if relation_items:
-            for relation_item in relation_items[:4]:
-                content.append(
-                    ft.Container(
-                        padding=10,
-                        border_radius=12,
-                        bgcolor=COLORS["bg_app"],
-                        border=ft.border.all(1, COLORS["border"]),
-                        content=ft.Row(
-                            [
-                                ft.Text(self._related_label_from_relation_item(relation_item), color=COLORS["text_main"], size=12, expand=True),
-                                ft.Text(
-                                    f"x {self._extract_related_quantity(relation_item):.2f}",
-                                    color=COLORS["accent"],
-                                    size=11,
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                    )
-                )
+            preview_cards = [
+                self._build_relation_preview_card(relation, relation_item)
+                for relation_item in relation_items[:4]
+            ]
+            if self.current_key == "proveedores" and relation.get("payload_id_key") == "materiaPrimaId":
+                content.append(ft.ResponsiveRow(preview_cards, columns=2, run_spacing=8, spacing=8))
+            else:
+                content.extend(preview_cards)
             if len(relation_items) > 4:
                 content.append(ft.Text(f"+ {len(relation_items) - 4} relacion(es) mas", color=COLORS["text_muted"], size=11))
         else:
@@ -542,23 +564,27 @@ class DashboardScreen:
             inputs[field["key"]] = entry
             controls.append(entry["view"])
 
-        relation_state = None
-        if self.current_config.get("relation"):
-            relation_state = self._build_inline_relation_state(self.current_config["relation"], item)
+        relation_states = []
+        relations = self._relations_for_current_config()
+        if relations:
             controls.extend(
                 [
                     ft.Divider(color=COLORS["border"]),
                     ft.Text("Relaciones", color=COLORS["text_main"], size=18, weight=ft.FontWeight.W_600),
-                    ft.Text(
-                        "Las relaciones se gestionan desde la entidad principal, como pide el flujo del proyecto.",
-                        color=COLORS["text_soft"],
-                        size=12,
-                    ),
-                    relation_state["view"],
                 ]
             )
+            for relation in relations:
+                relation_state = self._build_inline_relation_state(relation, item)
+                relation_states.append(relation_state)
+                controls.extend(
+                    [
+                        ft.Text(relation["title"], color=COLORS["text_main"], size=14, weight=ft.FontWeight.W_600),
+                        relation_state["view"],
+                    ]
+                )
 
-        self._configure_totals(inputs, relation_state, item)
+        totals_relation_state = next((state for state in relation_states if state["relation"].get("price_field")), None)
+        self._configure_totals(inputs, totals_relation_state, item)
 
         form_error = ft.Text("", size=12, color=COLORS["danger"])
 
@@ -570,7 +596,7 @@ class DashboardScreen:
                     self.feedback.value = "Registro actualizado correctamente."
                 else:
                     created = self.api.post(self.current_config["endpoint"], payload)
-                    self._persist_inline_relations(created, relation_state)
+                    self._persist_inline_relations(created, relation_states)
                     self.feedback.value = "Registro creado correctamente."
                 self.feedback.color = COLORS["success"]
                 dlg.open = False
@@ -598,6 +624,212 @@ class DashboardScreen:
             ],
         )
         self.page.show_dialog(dlg)
+
+    def _build_relation_preview_card(self, relation: dict, relation_item: dict):
+        detail_lines = self._relation_display_lines(relation, relation_item)
+        card = ft.Container(
+            padding=10,
+            border_radius=12,
+            bgcolor=COLORS["bg_app"],
+            border=ft.border.all(1, COLORS["border"]),
+            content=ft.Column(
+                [
+                    ft.Text(
+                        self._related_label_from_relation_item(relation_item),
+                        color=COLORS["text_main"],
+                        size=12,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    *[
+                        ft.Text(line, color=COLORS["text_soft"], size=11)
+                        for line in detail_lines
+                    ],
+                ],
+                spacing=4,
+            ),
+        )
+        if self.current_key == "proveedores" and relation.get("payload_id_key") == "materiaPrimaId":
+            return ft.Container(card, col={"sm": 2, "md": 1})
+        return card
+
+    def _open_venta_print(self, item: dict):
+        relation = self.current_config.get("relation")
+        products = []
+        if relation:
+            try:
+                products = self._get_relation_items(relation, item["id"])
+            except ApiError as exc:
+                self.feedback.value = str(exc)
+                self.feedback.color = COLORS["danger"]
+                self.page.update()
+                return
+
+        product_rows = []
+        if products:
+            for product in products:
+                values = self._extract_relation_values(product, relation)
+                quantity = self._format_quantity_display(values.get("cantidad"))
+                unit_price = self._format_value(self._extract_related_price(product, relation.get("price_field", "precio")))
+                product_rows.append(
+                    ft.Container(
+                        padding=10,
+                        border_radius=12,
+                        bgcolor=COLORS["bg_app"],
+                        border=ft.border.all(1, COLORS["border"]),
+                        content=ft.Row(
+                            [
+                                ft.Column(
+                                    [
+                                        ft.Text(self._related_label_from_relation_item(product), color=COLORS["text_main"], size=13, weight=ft.FontWeight.W_600),
+                                        ft.Text(f"Cantidad: {quantity}", color=COLORS["text_soft"], size=11),
+                                    ],
+                                    spacing=2,
+                                    expand=True,
+                                ),
+                                ft.Text(f"Unitario: {unit_price}", color=COLORS["accent"], size=11, weight=ft.FontWeight.W_600),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        ),
+                    )
+                )
+        else:
+            product_rows.append(ft.Text("No hay productos asociados.", color=COLORS["text_soft"], size=12))
+
+        printers = self._detect_printers()
+        printer_note = (
+            ft.Text(
+                f"Impresora detectada: {printers[0]}",
+                color=COLORS["success"],
+                size=12,
+            )
+            if printers
+            else ft.Text(
+                "No se detecto impresora local. Puedes revisar la vista previa, pero no se intentara imprimir automaticamente.",
+                color=COLORS["warning"],
+                size=12,
+            )
+        )
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            bgcolor=COLORS["bg_panel"],
+            title=ft.Text("Imprimir venta", color=COLORS["text_main"]),
+            content=ft.Container(
+                width=620,
+                content=ft.Column(
+                    [
+                        ft.Text(f"Metodo de pago: {item.get('metodoPago', '-')}", color=COLORS["text_main"], size=13),
+                        ft.Text(f"Fecha: {self._format_value(item.get('fecha'))}", color=COLORS["text_soft"], size=12),
+                        ft.Text(f"Total: {self._format_value(item.get('total'))}", color=COLORS["text_main"], size=13),
+                        ft.Text(f"Total con descuento: {self._format_value(item.get('totalDesc'))}", color=COLORS["text_soft"], size=12),
+                        printer_note,
+                        ft.Divider(color=COLORS["border"]),
+                        ft.Text("Productos", color=COLORS["text_main"], size=16, weight=ft.FontWeight.W_600),
+                        *product_rows,
+                    ],
+                    tight=True,
+                    scroll=ft.ScrollMode.AUTO,
+                    height=420,
+                ),
+            ),
+            actions=[
+                *(
+                    [
+                        ft.ElevatedButton(
+                            "Imprimir ahora",
+                            icon=ft.Icons.PRINT,
+                            on_click=lambda e: self._print_venta(item, products, dlg),
+                            style=button_style("accent"),
+                        )
+                    ]
+                    if printers
+                    else []
+                ),
+                ft.TextButton("Cerrar", on_click=lambda e: self._close_dialog(dlg)),
+            ],
+        )
+        self.page.show_dialog(dlg)
+
+    def _print_venta(self, item: dict, products: list[dict], dlg):
+        printers = self._detect_printers()
+        if not printers:
+            self.feedback.value = "No se detecto ninguna impresora local para esta venta."
+            self.feedback.color = COLORS["danger"]
+            dlg.open = False
+            self.page.update()
+            return
+
+        try:
+            receipt_text = self._build_venta_receipt_text(item, products)
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt", encoding="utf-8") as temp_file:
+                temp_file.write(receipt_text)
+                temp_path = temp_file.name
+
+            if os.name == "nt":
+                subprocess.run(["notepad.exe", "/p", temp_path], check=True, timeout=20)
+            else:
+                raise ApiError("La impresion automatica solo esta soportada en escritorio Windows.")
+
+            self.feedback.value = f"Venta enviada a imprimir en {printers[0]}."
+            self.feedback.color = COLORS["success"]
+            dlg.open = False
+            self.page.update()
+        except Exception as exc:
+            self.feedback.value = f"No se pudo imprimir la venta: {exc}"
+            self.feedback.color = COLORS["danger"]
+            self.page.update()
+
+    def _build_venta_receipt_text(self, item: dict, products: list[dict]):
+        lines = [
+            "VENTA",
+            "",
+            f"Metodo de pago: {item.get('metodoPago', '-')}",
+            f"Fecha: {self._format_value(item.get('fecha'))}",
+            f"Total: {self._format_value(item.get('total'))}",
+            f"Total con descuento: {self._format_value(item.get('totalDesc'))}",
+            "",
+            "PRODUCTOS",
+            "",
+        ]
+
+        relation = self.current_config.get("relation")
+        if products:
+            for product in products:
+                values = self._extract_relation_values(product, relation) if relation else {}
+                quantity = self._format_quantity_display(values.get("cantidad"))
+                unit_price = self._format_value(self._extract_related_price(product, relation.get("price_field", "precio"))) if relation else "-"
+                lines.extend(
+                    [
+                        f"- {self._related_label_from_relation_item(product)}",
+                        f"  Cantidad: {quantity}",
+                        f"  Precio unitario: {unit_price}",
+                    ]
+                )
+        else:
+            lines.append("Sin productos asociados.")
+
+        return "\n".join(lines)
+
+    def _detect_printers(self):
+        if getattr(self.page, "web", False) or os.name != "nt":
+            return []
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-Printer | Select-Object -ExpandProperty Name",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        except Exception:
+            return []
+
 
     def _confirm_delete(self, item: dict):
         def remove(_):
@@ -899,20 +1131,28 @@ class DashboardScreen:
 
         dropdown = ft.Dropdown(
             label="Entidad relacionada",
-            options=[ft.dropdown.Option(key=key, text=label) for key, label in option_map.items()],
+            options=[
+                ft.dropdown.Option(key=key, text=option["label"])
+                for key, option in option_map.items()
+            ],
             **input_style(as_dropdown=True),
         )
-        quantity_field = ft.TextField(
-            label="Cantidad",
-            value="1",
-            keyboard_type=ft.KeyboardType.NUMBER,
-            **input_style(),
+        relation_fields = self._relation_fields(relation)
+        field_entries = {}
+        field_controls = []
+        for field in relation_fields:
+            entry = self._create_input_entry(field, field.get("default", ""), False)
+            field_entries[field["key"]] = entry
+            field_controls.append(ft.Container(entry["view"], col={"sm": 12, "md": 3}))
+        has_stock_variant = any(
+            relation.get(key)
+            for key in ("create_path_stock", "update_path_stock", "delete_path_stock")
         )
         use_stock = ft.Switch(
-            label="Ajustar stock",
+            label=relation.get("stock_toggle_label", "Ajustar stock"),
             value=False,
             active_color=COLORS["success"],
-            visible="create_path_stock" in relation,
+            visible=has_stock_variant,
         )
         action_button = ft.ElevatedButton(
             "Agregar relacion",
@@ -949,11 +1189,11 @@ class DashboardScreen:
                 action_button.icon = ft.Icons.ADD_LINK
                 action_button.style = button_style("accent")
                 dropdown.value = None
-                quantity_field.value = "1"
+                self._set_relation_form_values(field_entries, relation_fields, {})
             else:
                 current = selected_items[related_id]
                 dropdown.value = str(related_id)
-                quantity_field.value = str(current["cantidad"])
+                self._set_relation_form_values(field_entries, relation_fields, current["values"])
                 action_button.text = "Actualizar relacion"
                 action_button.icon = ft.Icons.SAVE
                 action_button.style = button_style("primary")
@@ -974,18 +1214,12 @@ class DashboardScreen:
                             content=ft.Row(
                                 [
                                     ft.Column(
-                                        [
-                                            ft.Text(related_item["label"], color=COLORS["text_main"], size=13, weight=ft.FontWeight.W_600),
-                                            ft.Text(
-                                                f"Cantidad: {related_item['cantidad']:.2f}",
-                                                color=COLORS["text_soft"],
-                                                size=11,
-                                            ),
-                                            ft.Text(
-                                                f"Unitario: {self._format_value(related_item.get('unit_price'))}",
-                                                color=COLORS["text_muted"],
-                                                size=11,
-                                            ),
+                                [
+                                    ft.Text(related_item["label"], color=COLORS["text_main"], size=13, weight=ft.FontWeight.W_600),
+                                    *[
+                                        ft.Text(line, color=COLORS["text_soft"] if index == 0 else COLORS["text_muted"], size=11)
+                                        for index, line in enumerate(self._relation_display_lines(relation, related_item["values"], from_state=True))
+                                    ],
                                         ],
                                         spacing=2,
                                         expand=True,
@@ -1014,10 +1248,12 @@ class DashboardScreen:
         def remove_selected(related_id):
             try:
                 if item is not None:
-                    delete_path = relation.get("delete_path_stock") if use_stock.value else relation.get("delete_path")
-                    if not delete_path:
-                        raise ApiError("No se puede eliminar esta relacion desde la interfaz.")
-                    self.api.delete(delete_path.format(id=item["id"], related_id=related_id))
+                    self._delete_existing_relation(
+                        relation=relation,
+                        item=item,
+                        related_id=related_id,
+                        use_stock=use_stock.value,
+                    )
                     self._load_existing_relations(state, option_map)
                 else:
                     selected_items.pop(related_id, None)
@@ -1033,20 +1269,18 @@ class DashboardScreen:
             try:
                 if not dropdown.value:
                     raise ApiError("Selecciona una entidad relacionada.")
-                quantity = self._parse_number(quantity_field.value, "Cantidad")
-                if quantity <= 0:
-                    raise ApiError("La cantidad debe ser mayor a cero.")
 
                 related_id = int(dropdown.value)
                 option = option_map.get(dropdown.value, {"label": "Relacion", "price": 0.0})
                 label = option["label"]
+                values = self._read_relation_form_values(relation, field_entries)
 
                 if item is not None:
                     self._save_existing_relation(
                         relation=relation,
                         item=item,
                         related_id=related_id,
-                        quantity=quantity,
+                        values=values,
                         use_stock=use_stock.value,
                         already_exists=related_id in selected_items,
                     )
@@ -1054,7 +1288,7 @@ class DashboardScreen:
                 else:
                     selected_items[related_id] = {
                         "label": label,
-                        "cantidad": quantity,
+                        "values": values,
                         "unit_price": option.get("price", 0.0),
                     }
 
@@ -1078,7 +1312,7 @@ class DashboardScreen:
                 ft.ResponsiveRow(
                     [
                         ft.Container(dropdown, col={"sm": 12, "md": 5}),
-                        ft.Container(quantity_field, col={"sm": 12, "md": 3}),
+                        *field_controls,
                         ft.Container(action_button, col={"sm": 12, "md": 2}),
                         ft.Container(cancel_edit_button, col={"sm": 12, "md": 2}),
                     ],
@@ -1093,22 +1327,19 @@ class DashboardScreen:
         state["view"] = view
         return state
 
-    def _persist_inline_relations(self, created, relation_state):
-        if not relation_state or not relation_state["selected_items"]:
-            return
+    def _persist_inline_relations(self, created, relation_states):
         if not isinstance(created, dict) or created.get("id") is None:
             raise ApiError("La API no devolvio el identificador del registro creado para guardar las relaciones.")
-        relation = relation_state["relation"]
         created_id = created["id"]
-        path_key = "create_path_stock" if relation_state["use_stock"].value and relation.get("create_path_stock") else "create_path"
-        path_template = relation[path_key]
-
-        for related_id, item in relation_state["selected_items"].items():
-            payload = {
-                relation["payload_id_key"]: related_id,
-                "cantidad": item["cantidad"],
-            }
-            self.api.post(path_template.format(id=created_id), payload)
+        for relation_state in relation_states or []:
+            if not relation_state["selected_items"]:
+                continue
+            relation = relation_state["relation"]
+            path_key = "create_path_stock" if relation_state["use_stock"].value and relation.get("create_path_stock") else "create_path"
+            path_template = relation[path_key]
+            for related_id, relation_item in relation_state["selected_items"].items():
+                payload = self._relation_payload(relation, related_id, relation_item["values"])
+                self.api.post(path_template.format(**self._relation_path_values(relation, created_id, related_id)), payload)
 
     def _load_existing_relations(self, state: dict, option_map: dict[str, str]):
         relation = state["relation"]
@@ -1116,36 +1347,45 @@ class DashboardScreen:
         related_items = self.api.get(relation["list_path"].format(id=item["id"])) or []
         state["selected_items"].clear()
         for related_item in related_items:
-            related_id = self._extract_related_id(related_item, relation["payload_id_key"])
+            related_id = self._extract_related_id(related_item, relation)
             if related_id is None:
                 continue
             option = option_map.get(str(related_id), {})
             label = option.get("label") or self._related_label_from_relation_item(related_item)
-            quantity = self._extract_related_quantity(related_item)
-            unit_price = option.get("price")
-            if unit_price in (None, 0.0):
-                unit_price = self._extract_related_price(related_item, relation.get("price_field", "precio"))
             state["selected_items"][related_id] = {
                 "label": label,
-                "cantidad": quantity,
-                "unit_price": unit_price,
+                "values": self._extract_relation_values(related_item, relation),
+                "unit_price": option.get("price", self._extract_related_price(related_item, relation.get("price_field", "precio"))),
             }
 
-    def _save_existing_relation(self, relation: dict, item: dict, related_id: int, quantity: float, use_stock: bool, already_exists: bool):
+    def _save_existing_relation(self, relation: dict, item: dict, related_id: int, values: dict, use_stock: bool, already_exists: bool):
         if already_exists:
             update_path = relation.get("update_path_stock") if use_stock else relation["update_path"]
             self.api.patch(
-                update_path.format(id=item["id"], related_id=related_id),
-                {"cantidad": quantity},
+                update_path.format(**self._relation_path_values(relation, item["id"], related_id)),
+                self._relation_update_payload(relation, values),
             )
             return
 
-        payload = {
-            relation["payload_id_key"]: related_id,
-            "cantidad": quantity,
-        }
+        payload = self._relation_payload(relation, related_id, values)
         create_path = relation.get("create_path_stock") if use_stock else relation["create_path"]
-        self.api.post(create_path.format(id=item["id"]), payload)
+        self.api.post(create_path.format(**self._relation_path_values(relation, item["id"], related_id)), payload)
+
+    def _delete_existing_relation(self, relation: dict, item: dict, related_id: int, use_stock: bool):
+        delete_path = relation.get("delete_path_stock") if use_stock else relation.get("delete_path")
+        if delete_path:
+            self.api.delete(delete_path.format(**self._relation_path_values(relation, item["id"], related_id)))
+            return
+
+        # Some relation endpoints only document create/update; setting quantity to 0
+        # provides a best-effort removal path for those cases.
+        update_path = relation.get("update_path_stock") if use_stock else relation.get("update_path")
+        if not update_path:
+            raise ApiError("No se puede eliminar esta relacion desde la interfaz.")
+        self.api.patch(
+            update_path.format(**self._relation_path_values(relation, item["id"], related_id)),
+            self._relation_delete_payload(relation),
+        )
 
     def _configure_totals(self, inputs: dict, relation_state: dict | None, item: dict | None):
         if self.current_key not in {"pedidos", "ventas"}:
@@ -1183,7 +1423,9 @@ class DashboardScreen:
                 state["manual_total_desc"] = False
 
         if relation_state is not None:
-            relation_state["on_change"] = lambda: apply_totals(False)
+            # When products change inside pedidos/ventas, totals must be rebuilt
+            # from the current relation state instead of preserving stale manual edits.
+            relation_state["on_change"] = lambda: apply_totals(True)
 
         helper = ft.Row(
             [
@@ -1217,8 +1459,9 @@ class DashboardScreen:
         total = 0.0
         has_items = False
         for related_item in relation_state["selected_items"].values():
-            quantity = self._coerce_float(related_item.get("cantidad"))
-            unit_price = self._coerce_float(related_item.get("unit_price"))
+            values = related_item.get("values", {})
+            quantity = self._coerce_float(values.get("cantidad"))
+            unit_price = self._coerce_float(related_item.get("unit_price", values.get("precio")))
             total += quantity * unit_price
             has_items = True
         return total if has_items else 0.0
@@ -1233,6 +1476,39 @@ class DashboardScreen:
             raise ApiError(f"El campo {label} debe ser numerico.")
 
     @staticmethod
+    def _serialize_relation_quantity(value):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return value
+        return int(numeric) if numeric.is_integer() else numeric
+
+    def _relation_payload(self, relation: dict, related_id: int, values: dict):
+        return {
+            relation["payload_id_key"]: related_id,
+            **self._normalize_relation_values(relation, values),
+        }
+
+    def _relation_update_payload(self, relation: dict, values: dict):
+        return self._normalize_relation_values(relation, values)
+
+    def _relation_delete_payload(self, relation: dict):
+        if any(field["key"] == "cantidad" for field in self._relation_fields(relation)):
+            return {"cantidad": 0}
+        raise ApiError("No se puede eliminar esta relacion desde la interfaz.")
+
+    @staticmethod
+    def _relation_path_values(relation: dict, item_id: int, related_id: int):
+        values = {
+            "id": item_id,
+            "related_id": related_id,
+        }
+        related_path_key = relation.get("path_related_id_key")
+        if related_path_key:
+            values[related_path_key] = related_id
+        return values
+
+    @staticmethod
     def _coerce_float(value, default: float = 0.0):
         try:
             if value in ("", None):
@@ -1245,12 +1521,149 @@ class DashboardScreen:
     def _format_decimal_input(value: float):
         return f"{value:.2f}"
 
+    def _relations_for_current_config(self):
+        relations = self.current_config.get("relations")
+        if relations:
+            return relations
+        if self.current_config.get("relation"):
+            return [self.current_config["relation"]]
+        return []
+
+    def _relation_fields(self, relation: dict):
+        fields = relation.get("editor_fields")
+        if fields:
+            return fields
+        return [
+            {
+                "key": "cantidad",
+                "label": "Cantidad",
+                "type": "number",
+                "required": True,
+                "default": "1",
+            }
+        ]
+
+    def _read_relation_form_values(self, relation: dict, field_entries: dict):
+        values = {}
+        for field in self._relation_fields(relation):
+            entry = field_entries[field["key"]]
+            value = entry["get_value"]()
+            if field["type"] == "number":
+                if value in ("", None):
+                    if field.get("required"):
+                        raise ApiError(f"El campo {field['label']} es obligatorio.")
+                    continue
+                value = self._parse_number(value, field["label"])
+                if field["key"] == "cantidad" and value <= 0:
+                    raise ApiError("La cantidad debe ser mayor a cero.")
+                value = self._serialize_relation_quantity(value)
+            elif isinstance(value, str):
+                value = value.strip()
+
+            if field.get("required") and value in ("", None):
+                raise ApiError(f"El campo {field['label']} es obligatorio.")
+            values[field["key"]] = value
+        return values
+
+    def _set_relation_form_values(self, field_entries: dict, relation_fields: list[dict], values: dict):
+        for field in relation_fields:
+            control = field_entries[field["key"]]["control"]
+            value = values.get(field["key"], field.get("default", ""))
+            control.value = "" if value is None else str(value)
+
+    def _extract_relation_values(self, related_item, relation: dict):
+        values = {}
+        for field in self._relation_fields(relation):
+            lookup_keys = [field["key"]]
+            if field["key"] == "cantidad" and relation.get("quantity_key"):
+                lookup_keys.insert(0, relation["quantity_key"])
+            values[field["key"]] = self._extract_relation_field_value(related_item, lookup_keys, field["type"])
+        return values
+
+    def _extract_relation_field_value(self, related_item, keys, field_type: str):
+        if not isinstance(related_item, dict):
+            return None
+        if isinstance(keys, str):
+            keys = [keys]
+        for key in keys:
+            direct_value = related_item.get(key)
+            if direct_value not in (None, "") and not isinstance(direct_value, (dict, list)):
+                return self._coerce_float(direct_value) if field_type == "number" else direct_value
+        for value in related_item.values():
+            if isinstance(value, dict):
+                for key in keys:
+                    nested_value = value.get(key)
+                    if nested_value not in (None, ""):
+                        return self._coerce_float(nested_value) if field_type == "number" else nested_value
+        return None
+
+    def _normalize_relation_values(self, relation: dict, values: dict):
+        normalized = {}
+        for field in self._relation_fields(relation):
+            value = values.get(field["key"])
+            if value in ("", None):
+                continue
+            if field["type"] == "number":
+                normalized[field["key"]] = self._serialize_relation_quantity(value)
+            elif isinstance(value, str):
+                normalized[field["key"]] = value.strip()
+            else:
+                normalized[field["key"]] = value
+        return normalized
+
+    def _relation_display_lines(self, relation: dict, source, from_state: bool = False):
+        display_fields = relation.get("display_fields")
+        if display_fields:
+            values = source if from_state else self._extract_relation_values(source, relation)
+            lines = []
+            for field in display_fields:
+                raw_value = values.get(field["key"])
+                if raw_value in ("", None):
+                    continue
+                if field.get("format") == "money":
+                    rendered = self._format_value(self._coerce_float(raw_value))
+                elif field.get("format") == "quantity":
+                    rendered = self._format_quantity_display(raw_value)
+                else:
+                    rendered = str(raw_value)
+                lines.append(f"{field['label']}: {rendered}")
+            return lines
+
+        values = source if from_state else self._extract_relation_values(source, relation)
+        cantidad = values.get("cantidad")
+        lines = []
+        if cantidad not in ("", None):
+            lines.append(f"Cantidad: {self._format_quantity_display(cantidad)}")
+        unit_price = values.get("precio")
+        if unit_price not in ("", None):
+            lines.append(f"Precio: {self._format_value(self._coerce_float(unit_price))}")
+        return lines
+
+    def _get_relation_items(self, relation: dict, item_id: int):
+        cache_key = (relation["list_path"], item_id)
+        if cache_key in self.relation_items_cache:
+            return self.relation_items_cache[cache_key]
+        items = self.api.get(relation["list_path"].format(id=item_id)) or []
+        self.relation_items_cache[cache_key] = items
+        return items
+
     def _apply_filters(self, rows: list[dict]):
         filtered = rows
         for key, entry in self.filter_inputs.items():
             raw_value = entry["control"].value
             if raw_value in (None, ""):
                 continue
+
+            if self.current_key == "proveedores" and key in {"materiaPrimaNombre", "marca", "precioMin", "precioMax"}:
+                filtered = [row for row in filtered if self._provider_matches_offer_filters(row)]
+                continue
+            if self.current_key == "productos" and key == "materiaPrimaNombre":
+                filtered = [row for row in filtered if self._product_matches_materia_prima_filter(row)]
+                continue
+            if self.current_key in {"ventas", "pedidos"} and key in {"totalMin", "totalMax"}:
+                filtered = [row for row in filtered if self._row_matches_total_range(row)]
+                continue
+
             value = str(raw_value).strip().lower()
             filter_type = entry["config"]["type"]
             if filter_type == "date":
@@ -1259,41 +1672,166 @@ class DashboardScreen:
                 filtered = [row for row in filtered if value in str(row.get(key, "")).lower()]
         return filtered
 
+    def _provider_matches_offer_filters(self, row: dict):
+        relation = self.current_config.get("relation")
+        if not relation:
+            return True
+
+        materia_nombre = self._filter_value("materiaPrimaNombre")
+        marca = self._filter_value("marca")
+        precio_min = self._filter_number_value("precioMin")
+        precio_max = self._filter_number_value("precioMax")
+
+        if not any(value is not None and value != "" for value in (materia_nombre, marca, precio_min, precio_max)):
+            return True
+
+        try:
+            relation_items = self._get_relation_items(relation, row["id"])
+        except ApiError:
+            return False
+
+        for relation_item in relation_items:
+            if materia_nombre and materia_nombre not in self._related_label_from_relation_item(relation_item).lower():
+                continue
+            relation_values = self._extract_relation_values(relation_item, relation)
+            if marca and marca not in str(relation_values.get("marca", "")).lower():
+                continue
+            precio = self._coerce_float(relation_values.get("precio"), None)
+            if precio_min is not None and (precio is None or precio < precio_min):
+                continue
+            if precio_max is not None and (precio is None or precio > precio_max):
+                continue
+            return True
+        return False
+
+    def _product_matches_materia_prima_filter(self, row: dict):
+        relation = self.current_config.get("relation")
+        if not relation:
+            return True
+        materia_nombre = self._filter_value("materiaPrimaNombre")
+        if not materia_nombre:
+            return True
+        try:
+            relation_items = self._get_relation_items(relation, row["id"])
+        except ApiError:
+            return False
+        return any(
+            materia_nombre in self._related_label_from_relation_item(relation_item).lower()
+            for relation_item in relation_items
+        )
+
+    def _row_matches_total_range(self, row: dict):
+        total = self._coerce_float(row.get("total"), None)
+        total_min = self._filter_number_value("totalMin")
+        total_max = self._filter_number_value("totalMax")
+        if total is None:
+            return False
+        if total_min is not None and total < total_min:
+            return False
+        if total_max is not None and total > total_max:
+            return False
+        return True
+
+    def _filter_value(self, key: str):
+        entry = self.filter_inputs.get(key)
+        if not entry:
+            return ""
+        raw_value = entry["control"].value
+        return str(raw_value).strip().lower() if raw_value not in (None, "") else ""
+
+    def _filter_number_value(self, key: str):
+        entry = self.filter_inputs.get(key)
+        if not entry:
+            return None
+        raw_value = entry["control"].value
+        if raw_value in (None, ""):
+            return None
+        try:
+            return self._parse_number(raw_value, entry["config"]["label"])
+        except ApiError:
+            return None
+
     def _clear_filters(self):
         for entry in self.filter_inputs.values():
             entry["control"].value = None if isinstance(entry["control"], ft.Dropdown) else ""
         self._render_rows()
 
-    def _extract_related_id(self, related_item, payload_id_key: str):
+    def _extract_related_id(self, related_item, relation: dict):
         if isinstance(related_item, dict):
-            value = related_item.get(payload_id_key)
-            if value is not None:
-                return int(value)
+            preferred_keys = [relation["payload_id_key"], *relation.get("payload_id_aliases", [])]
+            normalized_keys = {key.lower() for key in preferred_keys}
+
+            for key in preferred_keys:
+                value = related_item.get(key)
+                if value is not None:
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        pass
+
+            for key in preferred_keys:
+                nested_key = key[:-2] if key.endswith("Id") else key
+                nested_value = related_item.get(nested_key)
+                if isinstance(nested_value, dict) and nested_value.get("id") is not None:
+                    return int(nested_value["id"])
+
             for key, candidate in related_item.items():
-                if key.lower().endswith("id") and candidate is not None and not isinstance(candidate, (dict, list)):
+                normalized_key = key.lower()
+                if normalized_key in normalized_keys and candidate is not None and not isinstance(candidate, (dict, list)):
                     try:
                         return int(candidate)
                     except (TypeError, ValueError):
                         pass
-            nested_key = payload_id_key[:-2] if payload_id_key.endswith("Id") else payload_id_key
-            nested_value = related_item.get(nested_key)
-            if isinstance(nested_value, dict) and nested_value.get("id") is not None:
-                return int(nested_value["id"])
+                if (
+                    normalized_key.endswith("id")
+                    and normalized_key != "id"
+                    and candidate is not None
+                    and not isinstance(candidate, (dict, list))
+                ):
+                    try:
+                        return int(candidate)
+                    except (TypeError, ValueError):
+                        pass
             for value in related_item.values():
                 if isinstance(value, dict) and value.get("id") is not None:
                     try:
                         return int(value["id"])
                     except (TypeError, ValueError):
                         pass
-            if related_item.get("id") is not None and len(related_item.keys()) <= 3:
-                return int(related_item["id"])
         return None
 
-    def _extract_related_quantity(self, related_item):
+    def _extract_related_quantity(self, related_item, relation: dict | None = None):
         if isinstance(related_item, dict):
-            value = related_item.get("cantidad", 1)
-            return self._coerce_float(value, 1.0)
+            quantity_keys = []
+            if relation and relation.get("quantity_key"):
+                quantity_keys.append(relation["quantity_key"])
+            quantity_keys.extend(["cantidad", "cantidadRelacionada", "cantidad_relacionada"])
+
+            normalized_keys = {key.lower() for key in quantity_keys}
+
+            for key in quantity_keys:
+                direct_value = related_item.get(key)
+                if direct_value not in (None, ""):
+                    return self._coerce_float(direct_value, 1.0)
+
+            for key, value in related_item.items():
+                if key.lower() in normalized_keys and value not in (None, "") and not isinstance(value, (dict, list)):
+                    return self._coerce_float(value, 1.0)
+
+            for value in related_item.values():
+                if isinstance(value, dict):
+                    for key in quantity_keys:
+                        nested_quantity = value.get(key)
+                        if nested_quantity not in (None, ""):
+                            return self._coerce_float(nested_quantity, 1.0)
         return 1.0
+
+    @staticmethod
+    def _format_quantity_display(value):
+        numeric = DashboardScreen._coerce_float(value, 0.0)
+        if float(numeric).is_integer():
+            return str(int(numeric))
+        return f"{numeric:.4f}".rstrip("0").rstrip(".")
 
     def _extract_related_price(self, related_item, price_field: str):
         if not isinstance(related_item, dict):
@@ -1343,9 +1881,25 @@ class DashboardScreen:
             return None
         if isinstance(value, datetime):
             return value
+        if isinstance(value, (int, float)):
+            timestamp = float(value)
+            if abs(timestamp) < 10_000_000_000:
+                timestamp *= 1000
+            return datetime.fromtimestamp(timestamp / 1000, tz=datetime.now().astimezone().tzinfo)
         if isinstance(value, date):
             return datetime.combine(value, time.min, tzinfo=datetime.now().astimezone().tzinfo)
         if isinstance(value, str):
+            normalized_text = value.strip()
+            if normalized_text.isdigit():
+                timestamp = float(normalized_text)
+                if abs(timestamp) < 10_000_000_000:
+                    timestamp *= 1000
+                return datetime.fromtimestamp(timestamp / 1000, tz=datetime.now().astimezone().tzinfo)
+            try:
+                parsed_local_date = datetime.strptime(normalized_text, "%d/%m/%Y")
+                return parsed_local_date.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            except ValueError:
+                pass
             normalized = value.replace("Z", "+00:00")
             try:
                 return datetime.fromisoformat(normalized)
@@ -1373,11 +1927,8 @@ class DashboardScreen:
             value = datetime.combine(value, time.min, tzinfo=datetime.now().astimezone().tzinfo)
         if value.tzinfo is None:
             value = value.replace(tzinfo=datetime.now().astimezone().tzinfo)
-        if not field.get("auto_now_local_on_create") and not field.get("include_time"):
-            value = value.replace(hour=0, minute=0, second=0, microsecond=0)
-        offset = value.strftime("%z")
-        java_offset = f"{offset[:3]}:{offset[3:]}" if offset else "+00:00"
-        return f"{value.strftime('%Y-%m-%dT%H:%M:%S')}.{int(value.microsecond / 1000):03d}{java_offset}"
+        value = value.replace(hour=0, minute=0, second=0, microsecond=0)
+        return value.strftime("%d/%m/%Y")
 
     def _empty_state(self, text: str):
         return ft.Container(
@@ -1385,6 +1936,36 @@ class DashboardScreen:
             alignment=ft.Alignment(0, 0),
             content=ft.Text(text, color=COLORS["text_soft"], size=14, text_align=ft.TextAlign.CENTER),
         )
+
+    def _show_payment_required_alert(self):
+        dlg = ft.AlertDialog(
+            modal=True,
+            bgcolor=COLORS["bg_panel"],
+            shape=ft.RoundedRectangleBorder(radius=18),
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=COLORS["warning"], size=28),
+                    ft.Text("Pago pendiente", color=COLORS["text_main"], weight=ft.FontWeight.BOLD),
+                ],
+                spacing=10,
+            ),
+            content=ft.Text(
+                "Esta falto de pago.",
+                color=COLORS["text_soft"],
+                size=14,
+            ),
+            actions=[
+                ft.TextButton(
+                    "Entendido",
+                    style=ft.ButtonStyle(color=COLORS["warning"]),
+                    on_click=lambda e: self._close_dialog(dlg),
+                )
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dlg
+        dlg.open = True
+        self.page.update()
 
     def _config_for(self, key: str):
         for entity in self.entities:

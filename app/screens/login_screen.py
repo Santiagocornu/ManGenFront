@@ -1,6 +1,6 @@
 import flet as ft
 
-from app.services.api_client import ApiError
+from app.services.api_client import ApiError, PaymentRequiredError
 from app.ui.theme import COLORS, button_style, input_style, panel
 
 
@@ -81,6 +81,42 @@ class LoginScreen:
         self.status_text.value = message
         self.status_text.color = COLORS["success"] if success else COLORS["danger"]
 
+    def _show_payment_required_alert(self):
+        dlg = ft.AlertDialog(
+            modal=True,
+            bgcolor=COLORS["bg_panel"],
+            shape=ft.RoundedRectangleBorder(radius=18),
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=COLORS["warning"], size=28),
+                    ft.Text("Pago pendiente", color=COLORS["text_main"], weight=ft.FontWeight.BOLD),
+                ],
+                spacing=10,
+            ),
+            content=ft.Text(
+                "Esta falto de pago.",
+                color=COLORS["text_soft"],
+                size=14,
+            ),
+            actions=[
+                ft.TextButton(
+                    "Entendido",
+                    style=ft.ButtonStyle(color=COLORS["warning"]),
+                    on_click=lambda e: self._close_dialog(dlg),
+                )
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dlg
+        dlg.open = True
+        self.page.update()
+
+    def _close_dialog(self, dlg):
+        dlg.open = False
+        if self.page.dialog is dlg:
+            self.page.dialog = None
+        self.page.update()
+
     def _friendly_error(self, exc: Exception):
         message = str(exc).strip()
         if not message:
@@ -115,6 +151,8 @@ class LoginScreen:
             )
             self._show_status("Sesi\u00f3n iniciada correctamente.", True)
         except Exception as exc:
+            if isinstance(exc, PaymentRequiredError):
+                self._show_payment_required_alert()
             self.login_error_text.value = self._friendly_error(exc)
         self.page.update()
 
@@ -138,6 +176,8 @@ class LoginScreen:
             self.change_new_password_field.value = ""
             self._show_status("Contrase\u00f1a actualizada correctamente.", True)
         except Exception as exc:
+            if isinstance(exc, PaymentRequiredError):
+                self._show_payment_required_alert()
             self.change_password_error_text.value = self._friendly_error(exc)
         self.page.update()
 
@@ -166,6 +206,8 @@ class LoginScreen:
             self._show_status("Sucursal creada correctamente. Ahora puedes iniciar sesi\u00f3n.", True)
             self.page.update()
         except Exception as exc:
+            if isinstance(exc, PaymentRequiredError):
+                self._show_payment_required_alert()
             self.register_error_text.value = self._friendly_error(exc)
             self.page.update()
 

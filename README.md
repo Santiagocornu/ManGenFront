@@ -135,7 +135,11 @@ Si afecta stock:
 
 Se descuenta:
 Stock del producto
-Stock de materias primas asociadas
+No modifica el stock de las materias primas asociadas
+
+Relaciones producto-materia prima
+
+La interfaz permite elegir si al crear, editar o eliminar una relacion tambien se ajusta el stock de la materia prima.
 Venta desde pedido
 
 Endpoints:
