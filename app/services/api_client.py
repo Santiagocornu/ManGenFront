@@ -18,7 +18,10 @@ class PaymentRequiredError(ApiError):
 
 
 class ApiClient:
-    DEFAULT_BASE_URL = "http://192.168.100.50:8080"
+    # Developer-only: keep the API base URL in code/config, but do NOT display
+    # it in the UI shown to end users. The frontend may log or use this value
+    # internally, but it should remain hidden from ordinary users.
+    DEFAULT_BASE_URL = "https://api.mangenapp.com"
 
     def __init__(self):
         self.base_url = self.DEFAULT_BASE_URL

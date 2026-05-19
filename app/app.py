@@ -1,4 +1,6 @@
 import flet as ft
+import os
+import sys
 
 from app.config.entities import ENTITY_CONFIGS
 from app.screens.dashboard import DashboardScreen
@@ -7,14 +9,32 @@ from app.services.api_client import ApiClient, ApiError
 from app.ui.theme import COLORS
 
 
-class ManagerPeneApp:
+class MagenApp:
     def __init__(self, page: ft.Page):
         self.page = page
         self.api = ApiClient()
         self.user = None
         self.entities = []
 
-        self.page.title = "ManagerPene"
+        # App title and window icon
+        self.page.title = "Mangen"
+
+        # Resolve icon path for both development and PyInstaller one-file bundle
+        try:
+            if getattr(sys, "frozen", False):
+                # Running in a PyInstaller bundle
+                base = sys._MEIPASS
+            else:
+                # Running from source; assets are located at project root
+                base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets"))
+            icon_path = os.path.join(base, "assets", "logo.ico") if not getattr(sys, "frozen", False) and os.path.isdir(base) and base.endswith("assets") else os.path.join(base, "logo.ico")
+            if os.path.exists(icon_path):
+                try:
+                    self.page.window.icon = icon_path
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self.page.bgcolor = COLORS["bg_app"]
         self.page.padding = 0
         self.page.spacing = 0
@@ -120,7 +140,7 @@ class ManagerPeneApp:
 
 async def main(page: ft.Page):
     try:
-        app = ManagerPeneApp(page)
+        app = MagenApp(page)
         await app.initialize()
     except ApiError as exc:
         page.add(ft.Text(f"Error inicializando la app: {exc}"))

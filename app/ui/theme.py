@@ -38,7 +38,7 @@ def input_style(as_dropdown: bool = False):
         shared["filled"] = False
         shared.pop("hint_style", None)
         shared["text_style"] = ft.TextStyle(color=COLORS["text_main"], size=13)
-        shared["content_padding"] = ft.padding.symmetric(horizontal=12, vertical=12)
+        shared["content_padding"] = ft.Padding.symmetric(horizontal=12, vertical=12)
         shared["menu_height"] = 280
         shared["height"] = 50
     return shared
@@ -56,7 +56,7 @@ def button_style(kind: str):
         bgcolor=bgcolor,
         color=color,
         shape=ft.RoundedRectangleBorder(radius=12),
-        padding=ft.padding.symmetric(horizontal=18, vertical=14),
+        padding=ft.Padding.symmetric(horizontal=18, vertical=14),
         text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_600),
     )
 

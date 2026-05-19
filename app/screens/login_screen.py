@@ -257,7 +257,7 @@ class LoginScreen:
             alignment=ft.MainAxisAlignment.CENTER,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=16, vertical=8),
+            padding=ft.Padding.symmetric(horizontal=16, vertical=8),
         )
 
     def _build_navigation_row(self):

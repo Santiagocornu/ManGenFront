@@ -1,3 +1,5 @@
+import asyncio
+import csv
 import flet as ft
 from datetime import date, datetime, time
 import os
@@ -86,7 +88,7 @@ class DashboardScreen:
                     border_radius=16,
                     bgcolor=COLORS["accent_soft"] if active else COLORS["glass"],
                     border=ft.border.all(1, COLORS["border"]),
-                    padding=ft.padding.symmetric(horizontal=14, vertical=12),
+                    padding=ft.Padding.symmetric(horizontal=14, vertical=12),
                     ink=True,
                     on_click=lambda e, key=entity["key"]: self.page.go(f"/{key}"),
                     content=ft.Row(
@@ -119,6 +121,7 @@ class DashboardScreen:
                 )
             )
 
+        alert_button = self._build_stock_alert_button()
         return ft.Container(
             expand=True,
             bgcolor=COLORS["bg_panel"],
@@ -126,7 +129,7 @@ class DashboardScreen:
             padding=24,
             content=ft.Column(
                 [
-                    ft.Text("ManagerPene", size=24, weight=ft.FontWeight.BOLD, color=COLORS["text_main"]),
+                    ft.Text("Mangen", size=24, weight=ft.FontWeight.BOLD, color=COLORS["text_main"]),
                     ft.Text("Operacion multi-sucursal para GenMan", size=12, color=COLORS["text_soft"]),
                     ft.Container(
                         margin=ft.margin.only(top=12, bottom=12),
@@ -142,6 +145,15 @@ class DashboardScreen:
                                         size=12,
                                         weight=ft.FontWeight.W_600,
                                     ),
+                                    *([
+                                        ft.Row(
+                                            [
+                                                ft.Container(expand=True),
+                                                alert_button,
+                                            ],
+                                            alignment=ft.MainAxisAlignment.END,
+                                        )
+                                    ] if alert_button else []),
                                 ],
                                 spacing=4,
                             ),
@@ -177,6 +189,20 @@ class DashboardScreen:
                 style=button_style("primary"),
                 height=44,
             ),
+        ]
+
+        if self.current_key != "sucursales":
+            actions.append(
+                ft.ElevatedButton(
+                    "Exportar Excel",
+                    icon=ft.Icons.FILE_DOWNLOAD,
+                    on_click=lambda e: self._export_filtered_rows(),
+                    style=button_style("accent"),
+                    height=44,
+                )
+            )
+
+        actions.append(
             ft.OutlinedButton(
                 "Recargar",
                 icon=ft.Icons.REFRESH,
@@ -188,7 +214,7 @@ class DashboardScreen:
                 ),
                 height=44,
             ),
-        ]
+        )
 
         for action in config.get("extra_actions", []):
             if action == "from_pedido":
@@ -202,6 +228,18 @@ class DashboardScreen:
                     )
                 )
 
+        if self.current_key == "sucursales":
+            actions.insert(
+                1,
+                ft.ElevatedButton(
+                    "Exportar sucursal",
+                    icon=ft.Icons.STOREFRONT,
+                    on_click=lambda e: self._export_branch_workbook(),
+                    style=button_style("success"),
+                    height=44,
+                ),
+            )
+
         return panel(
             ft.ResponsiveRow(
                 [
@@ -211,11 +249,7 @@ class DashboardScreen:
                             [
                                 ft.Text(config["title"], size=30, weight=ft.FontWeight.BOLD, color=COLORS["text_main"]),
                                 ft.Text(config.get("tagline", ""), size=13, color=COLORS["text_soft"]),
-                                ft.Text(
-                                    f"API: {self.api.base_url}",
-                                    size=11,
-                                    color=COLORS["text_muted"],
-                                ),
+                                # API URL intentionally hidden from UI for end users
                             ],
                             spacing=4,
                         ),
@@ -235,6 +269,148 @@ class DashboardScreen:
             ),
             padding=24,
         )
+
+    def _stock_threshold_for_unit(self, unit: str):
+        normalized = str(unit or "").strip().lower()
+        if normalized in {"kg", "kilogramo", "kilogramos", "kilogramos"}:
+            return 5.0
+        if normalized == "unidad":
+            return 10.0
+        return None
+
+    def _low_stock_items(self, rows: list[dict], item_type: str):
+        items = []
+        for row in rows:
+            threshold = self._stock_threshold_for_unit(row.get("unidad"))
+            if threshold is None:
+                continue
+            quantity = self._coerce_float(row.get("cantidad"), 0.0)
+            if quantity <= threshold:
+                items.append(
+                    {
+                        "label": str(row.get("nombre") or row.get("descripcion") or "Sin nombre"),
+                        "quantity": quantity,
+                        "unit": str(row.get("unidad") or "").strip(),
+                        "threshold": threshold,
+                        "type": item_type,
+                    }
+                )
+        return items
+
+    def _fetch_low_stock_alerts(self):
+        alerts = {"products": [], "materias_primas": [], "error": None}
+        try:
+            products = self.api.get("/apiManGen/Producto") or []
+            alerts["products"] = self._low_stock_items(products, "producto")
+            materias = self.api.get("/apiManGen/Materia_prima") or []
+            alerts["materias_primas"] = self._low_stock_items(materias, "materia_prima")
+        except ApiError as exc:
+            alerts["error"] = str(exc)
+        return alerts
+
+    def _build_stock_alert_button(self):
+        alerts = self._fetch_low_stock_alerts()
+        alert_count = len(alerts["products"]) + len(alerts["materias_primas"])
+        icon_color = COLORS["warning"] if alert_count else COLORS["text_soft"]
+        tooltip = (
+            f"{alert_count} alerta(s) de stock" if alert_count else "No hay alertas de stock"
+        )
+        return ft.IconButton(
+            icon=ft.Icons.NOTIFICATIONS,
+            icon_color=icon_color,
+            tooltip=tooltip,
+            on_click=lambda e: self._show_stock_alerts_dialog(self._fetch_low_stock_alerts()),
+            width=46,
+            height=46,
+        )
+
+    def _show_stock_alerts_dialog(self, alerts: dict):
+        search_input = ft.TextField(
+            label="Buscar por nombre",
+            width=520,
+            on_change=lambda e: render_alert_items(),
+            **input_style(),
+        )
+        results_column = ft.Column(spacing=8)
+
+        def render_alert_items():
+            search_value = str(search_input.value or "").strip().lower()
+            content_items = []
+
+            if alerts.get("error"):
+                content_items.append(
+                    ft.Text(
+                        f"No se pudieron cargar las alertas: {alerts['error']}",
+                        color=COLORS["danger"],
+                        size=12,
+                    )
+                )
+
+            def append_alerts(title: str, items: list[dict]):
+                filtered_items = [
+                    item for item in items
+                    if not search_value or search_value in item["label"].lower()
+                ]
+                if not filtered_items:
+                    return
+                content_items.append(
+                    ft.Text(
+                        title,
+                        color=COLORS["text_main"],
+                        size=14,
+                        weight=ft.FontWeight.W_600,
+                    )
+                )
+                for item in filtered_items:
+                    content_items.append(
+                        ft.Row(
+                            [
+                                ft.Text(item["label"], color=COLORS["text_main"], size=12, expand=True),
+                                ft.Text(
+                                    f"{self._format_quantity_display(item['quantity'])} {item['unit']} (umbral {self._format_value(item['threshold'])})",
+                                    color=COLORS["warning"],
+                                    size=12,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        )
+                    )
+
+            append_alerts("Productos con stock bajo", alerts.get("products", []))
+            append_alerts("Materias primas con stock bajo", alerts.get("materias_primas", []))
+
+            if not content_items:
+                content_items.append(
+                    ft.Text(
+                        "No hay alertas de stock que coincidan con la búsqueda.",
+                        color=COLORS["success"],
+                        size=12,
+                    )
+                )
+
+            results_column.controls = content_items
+            self.page.update()
+
+        render_alert_items()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            bgcolor=COLORS["bg_panel"],
+            title=ft.Text("Alertas de stock", color=COLORS["text_main"]),
+            content=ft.Container(
+                width=620,
+                content=ft.Column(
+                    [search_input, results_column],
+                    tight=True,
+                    scroll=ft.ScrollMode.AUTO,
+                    height=460,
+                ),
+            ),
+            actions=[
+                ft.TextButton("Cerrar", on_click=lambda e: self._close_dialog(dlg)),
+            ],
+        )
+        self.page.show_dialog(dlg)
 
     def _refresh_table(self):
         try:
@@ -310,12 +486,18 @@ class DashboardScreen:
         )
 
     def _ensure_filter_inputs(self):
-        expected_keys = [filter_config["key"] for filter_config in self.current_config.get("filters", [])]
+        filter_configs = list(self.current_config.get("filters", []))
+        has_nombre_field = any(field["key"] == "nombre" for field in self.current_config.get("fields", []))
+        has_nombre_filter = any(filter_config["key"] == "nombre" for filter_config in filter_configs)
+        if has_nombre_field and not has_nombre_filter:
+            filter_configs.insert(0, {"key": "search_nombre", "label": "Buscar por nombre", "type": "text"})
+
+        expected_keys = [filter_config["key"] for filter_config in filter_configs]
         if list(self.filter_inputs.keys()) == expected_keys:
             return
 
         inputs = {}
-        for filter_config in self.current_config.get("filters", []):
+        for filter_config in filter_configs:
             filter_type = filter_config["type"]
             if filter_type == "select":
                 control = ft.Dropdown(
@@ -345,7 +527,29 @@ class DashboardScreen:
         controls = []
         for key, entry in self.filter_inputs.items():
             control = entry["control"]
-            controls.append(ft.Container(control, col={"sm": 12, "md": 6, "lg": 3}))
+            if self.current_key == "ventas" and key == "fecha":
+                today_button = ft.ElevatedButton(
+                    "Hoy",
+                    icon=ft.Icons.CALENDAR_TODAY,
+                    on_click=lambda e, k=key: self._set_today_filter(k),
+                    style=button_style("accent"),
+                    height=44,
+                )
+                controls.append(
+                    ft.Container(
+                        ft.Row(
+                            [
+                                ft.Container(control, expand=True),
+                                today_button,
+                            ],
+                            spacing=8,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        col={"sm": 12, "md": 6, "lg": 3},
+                    )
+                )
+            else:
+                controls.append(ft.Container(control, col={"sm": 12, "md": 6, "lg": 3}))
 
         clear_button = ft.OutlinedButton(
             "Limpiar filtros",
@@ -392,7 +596,7 @@ class DashboardScreen:
                 continue
             details.append(
                 ft.Container(
-                    padding=ft.padding.symmetric(vertical=6),
+                    padding=ft.Padding.symmetric(vertical=6),
                     border=ft.border.only(bottom=ft.BorderSide(1, COLORS["border"])),
                     content=ft.Row(
                         [
@@ -491,6 +695,32 @@ class DashboardScreen:
                     style=button_style("success"),
                 )
             )
+        if self.current_key == "proveedores":
+            controls.append(
+                ft.OutlinedButton(
+                    "WhatsApp",
+                    icon=ft.Icons.CHAT,
+                    on_click=lambda e, item=row: self._send_whatsapp(item),
+                    style=ft.ButtonStyle(
+                        color=COLORS["success"],
+                        side=ft.BorderSide(1, COLORS["success"]),
+                        shape=ft.RoundedRectangleBorder(radius=12),
+                    ),
+                )
+            )
+            controls.append(
+                ft.OutlinedButton(
+                    "Email",
+                    icon=ft.Icons.EMAIL,
+                    on_click=lambda e, item=row: self._send_email(item),
+                    style=ft.ButtonStyle(
+                        color=COLORS["accent"],
+                        side=ft.BorderSide(1, COLORS["accent"]),
+                        shape=ft.RoundedRectangleBorder(radius=12),
+                    ),
+                )
+            )
+
         if self.current_key == "ventas":
             controls.append(
                 ft.OutlinedButton(
@@ -505,6 +735,30 @@ class DashboardScreen:
                 )
             )
         return controls
+
+    def _send_whatsapp(self, row: dict):
+        phone = row.get("numeroTelefono", "") or ""
+        digits = "+" + "".join(ch for ch in phone if ch.isdigit())
+        if not digits or digits == "+":
+            self.feedback.value = "Teléfono no disponible para WhatsApp."
+            self.page.update()
+            return
+
+        message = quote(f"Hola {row.get('nombre', 'Proveedor')}.")
+        url = f"https://wa.me/{digits.lstrip('+')}?text={message}"
+        asyncio.create_task(self.page.launch_url(url))
+
+    def _send_email(self, row: dict):
+        email = row.get("email", "") or ""
+        if not email:
+            self.feedback.value = "Email no disponible para este proveedor."
+            self.page.update()
+            return
+
+        subject = quote("Contacto desde ManGen")
+        body = quote(f"Hola {row.get('nombre', 'Proveedor')},%0D%0A%0D%0AMe gustaría coordinar una compra.")
+        url = f"mailto:{email}?subject={subject}&body={body}"
+        asyncio.create_task(self.page.launch_url(url))
 
     def _build_relation_preview(self, row: dict, relation: dict):
         relation_items = []
@@ -1649,7 +1903,17 @@ class DashboardScreen:
 
     def _apply_filters(self, rows: list[dict]):
         filtered = rows
+        if self._filter_value("search_nombre"):
+            search_value = self._filter_value("search_nombre")
+            filtered = [
+                row for row in filtered
+                if search_value in str(row.get("nombre", "")).lower()
+                or search_value in self._record_title(row).lower()
+            ]
+
         for key, entry in self.filter_inputs.items():
+            if key == "search_nombre":
+                continue
             raw_value = entry["control"].value
             if raw_value in (None, ""):
                 continue
@@ -1755,6 +2019,103 @@ class DashboardScreen:
         for entry in self.filter_inputs.values():
             entry["control"].value = None if isinstance(entry["control"], ft.Dropdown) else ""
         self._render_rows()
+
+    def _set_today_filter(self, key: str):
+        entry = self.filter_inputs.get(key)
+        if not entry:
+            return
+        today_value = date.today().strftime("%d/%m/%Y")
+        control = entry["control"]
+        control.value = today_value
+        self._render_rows()
+
+    def _export_filtered_rows(self):
+        rows = self._apply_filters(self.rows_cache)
+        if not rows:
+            self.feedback.value = "No hay registros para exportar."
+            self.feedback.color = COLORS["warning"]
+            self.page.update()
+            return
+        filename = f"{self.current_config.get('key', 'export')}.csv"
+        self._write_rows_to_csv(filename, rows)
+
+    def _export_branch_workbook(self):
+        all_data = []
+        for entity in self.entities:
+            try:
+                rows = self.api.get(entity["endpoint"]) or []
+            except ApiError as exc:
+                self.feedback.value = f"No se pudieron cargar {entity['title']}: {exc}"
+                self.feedback.color = COLORS["danger"]
+                self.page.update()
+                return
+            all_data.append((entity["title"], rows))
+
+        if not all_data:
+            self.feedback.value = "No hay datos para exportar de la sucursal."
+            self.feedback.color = COLORS["warning"]
+            self.page.update()
+            return
+
+        branch_name = self.user.get("nombre", "sucursal").replace(" ", "_")
+        filename = f"sucursal_{branch_name}_datos.csv"
+        self._write_branch_csv(filename, all_data)
+
+    def _write_rows_to_csv(self, filename: str, rows: list[dict]):
+        if not rows:
+            return
+        headers = list(rows[0].keys())
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv", encoding="utf-8", newline="") as temp_file:
+            writer = csv.writer(temp_file, delimiter=';')
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow([self._export_value(row.get(key)) for key in headers])
+            temp_path = temp_file.name
+
+        self._open_file(temp_path)
+        self.feedback.value = f"Excel generado: {filename}"
+        self.feedback.color = COLORS["success"]
+        self.page.update()
+
+    def _write_branch_csv(self, filename: str, all_data: list[tuple[str, list[dict]]]):
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv", encoding="utf-8", newline="") as temp_file:
+            writer = csv.writer(temp_file, delimiter=';')
+            for title, rows in all_data:
+                writer.writerow([title])
+                if not rows:
+                    writer.writerow(["Sin registros"])
+                else:
+                    headers = list(rows[0].keys())
+                    writer.writerow(headers)
+                    for row in rows:
+                        writer.writerow([self._export_value(row.get(key)) for key in headers])
+                writer.writerow([])
+            temp_path = temp_file.name
+
+        self._open_file(temp_path)
+        self.feedback.value = "Excel de sucursal generado."
+        self.feedback.color = COLORS["success"]
+        self.page.update()
+
+    def _export_value(self, value):
+        if isinstance(value, dict):
+            return str({k: self._export_value(v) for k, v in value.items()})
+        if isinstance(value, list):
+            return ", ".join(str(self._export_value(item)) for item in value)
+        if value is None:
+            return ""
+        return str(value)
+
+    def _open_file(self, path: str):
+        try:
+            if os.name == "nt":
+                os.startfile(path)
+            elif subprocess.run(["xdg-open", path], capture_output=True).returncode == 0:
+                pass
+        except Exception:
+            self.feedback.value = f"Archivo generado en: {path}"
+            self.feedback.color = COLORS["text_soft"]
+            self.page.update()
 
     def _extract_related_id(self, related_item, relation: dict):
         if isinstance(related_item, dict):
