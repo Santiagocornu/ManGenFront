@@ -1,12 +1,34 @@
 import flet as ft
 import os
 import sys
+import ctypes
 
 from app.config.entities import ENTITY_CONFIGS
 from app.screens.dashboard import DashboardScreen
 from app.screens.login_screen import LoginScreen
 from app.services.api_client import ApiClient, ApiError
 from app.ui.theme import COLORS
+
+
+APP_TITLE = "Mangen"
+APP_USER_MODEL_ID = "Mangen.ManGenApp.Desktop"
+
+
+def _asset_path(filename: str) -> str:
+    if getattr(sys, "frozen", False):
+        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    else:
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return os.path.join(base_dir, "assets", filename)
+
+
+def _configure_windows_app_id():
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except Exception:
+        pass
 
 
 class MagenApp:
@@ -17,24 +39,8 @@ class MagenApp:
         self.entities = []
 
         # App title and window icon
-        self.page.title = "Mangen"
-
-        # Resolve icon path for both development and PyInstaller one-file bundle
-        try:
-            if getattr(sys, "frozen", False):
-                # Running in a PyInstaller bundle
-                base = sys._MEIPASS
-            else:
-                # Running from source; assets are located at project root
-                base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets"))
-            icon_path = os.path.join(base, "assets", "logo.ico") if not getattr(sys, "frozen", False) and os.path.isdir(base) and base.endswith("assets") else os.path.join(base, "logo.ico")
-            if os.path.exists(icon_path):
-                try:
-                    self.page.window.icon = icon_path
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        self.page.title = APP_TITLE
+        self._set_window_icon()
         self.page.bgcolor = COLORS["bg_app"]
         self.page.padding = 0
         self.page.spacing = 0
@@ -43,6 +49,15 @@ class MagenApp:
         self.page.window_min_height = 640
         self.page.scroll = ft.ScrollMode.HIDDEN
         self.page.on_route_change = self._handle_route_change
+
+    def _set_window_icon(self):
+        icon_path = _asset_path("logo.ico")
+        if not os.path.exists(icon_path):
+            return
+        try:
+            self.page.window.icon = icon_path
+        except Exception:
+            pass
 
     async def initialize(self):
         self._render_current_route(self.page.route or "/")
@@ -147,4 +162,5 @@ async def main(page: ft.Page):
 
 
 def run():
-    ft.run(main)
+    _configure_windows_app_id()
+    ft.run(main, name=APP_TITLE, assets_dir=_asset_path(""))

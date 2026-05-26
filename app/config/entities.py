@@ -186,6 +186,7 @@ ENTITY_CONFIGS = [
         "fields": [
             {"key": "total", "label": "Total", "type": "number", "required": True},
             {"key": "totalDesc", "label": "Total con descuento", "type": "number", "required": True},
+            {"key": "descuentoGeneral", "label": "Descuento general (%)", "type": "number", "required": False, "default": "0", "client_only": True},
             {"key": "descripcion", "label": "Descripcion", "type": "text", "required": False, "multiline": True},
             {
                 "key": "estado",
@@ -216,6 +217,10 @@ ENTITY_CONFIGS = [
             "empty_text": "Este pedido todavia no tiene productos asociados.",
             "related_label_key": "nombre",
             "price_field": "precio",
+            "editor_fields": [
+                {"key": "cantidad", "label": "Cantidad", "type": "number", "required": True, "default": "1"},
+                {"key": "descuento", "label": "Descuento (%)", "type": "number", "required": False, "default": "0", "format": "percent"},
+            ],
         },
     },
     {
@@ -229,6 +234,7 @@ ENTITY_CONFIGS = [
         "fields": [
             {"key": "total", "label": "Total", "type": "number", "required": True},
             {"key": "totalDesc", "label": "Total con descuento", "type": "number", "required": True},
+            {"key": "descuentoGeneral", "label": "Descuento general (%)", "type": "number", "required": False, "default": "0", "client_only": True},
             {"key": "metodoPago", "label": "Metodo de pago", "type": "text", "required": True},
             {"key": "fecha", "label": "Fecha", "type": "date", "required": False},
         ],
@@ -257,6 +263,10 @@ ENTITY_CONFIGS = [
             "empty_text": "Esta venta todavia no tiene productos asociados.",
             "related_label_key": "nombre",
             "price_field": "precio",
+            "editor_fields": [
+                {"key": "cantidad", "label": "Cantidad", "type": "number", "required": True, "default": "1"},
+                {"key": "descuento", "label": "Descuento (%)", "type": "number", "required": False, "default": "0", "format": "percent"},
+            ],
             "stock_toggle_label": "Ajustar stock del producto",
         },
         "extra_actions": ["from_pedido"],

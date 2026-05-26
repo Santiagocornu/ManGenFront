@@ -191,6 +191,17 @@ class DashboardScreen:
             ),
         ]
 
+        if self.current_key == "ventas":
+            actions.append(
+                ft.ElevatedButton(
+                    "Generar informe de hoy",
+                    icon=ft.Icons.DESCRIPTION,
+                    on_click=lambda e: self._generate_today_report(),
+                    style=button_style("accent"),
+                    height=44,
+                )
+            )
+
         if self.current_key != "sucursales":
             actions.append(
                 ft.ElevatedButton(
@@ -502,15 +513,17 @@ class DashboardScreen:
             if filter_type == "select":
                 control = ft.Dropdown(
                     label=filter_config["label"],
-                    options=[ft.dropdown.Option(option) for option in filter_config["options"]],
+                    options=[
+                        ft.dropdown.Option(text=option, key=option)
+                        for option in filter_config["options"]
+                    ],
+                    value=None,
                     **input_style(as_dropdown=True),
                 )
-                control.on_change = lambda e: self._render_rows()
             else:
                 control = ft.TextField(
                     label=filter_config["label"],
                     keyboard_type=ft.KeyboardType.NUMBER if filter_type == "number" else ft.KeyboardType.TEXT,
-                    on_change=lambda e: self._render_rows(),
                     **input_style(),
                 )
             inputs[filter_config["key"]] = {"config": filter_config, "control": control}
@@ -551,6 +564,14 @@ class DashboardScreen:
             else:
                 controls.append(ft.Container(control, col={"sm": 12, "md": 6, "lg": 3}))
 
+        filter_button = ft.ElevatedButton(
+            "Filtrar",
+            icon=ft.Icons.FILTER_ALT,
+            on_click=lambda e: self._render_rows(),
+            style=button_style("accent"),
+            height=44,
+        )
+
         clear_button = ft.OutlinedButton(
             "Limpiar filtros",
             icon=ft.Icons.FILTER_ALT_OFF,
@@ -569,7 +590,10 @@ class DashboardScreen:
                     ft.Row(
                         [
                             ft.Text("Filtros", color=COLORS["text_main"], size=16, weight=ft.FontWeight.W_600),
-                            clear_button,
+                            ft.Row(
+                                [filter_button, clear_button],
+                                spacing=8,
+                            ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
@@ -806,6 +830,7 @@ class DashboardScreen:
         title = f"{'Editar' if is_edit else 'Nuevo'} {self.current_config.get('singular_title', self.current_config['title'])}"
         controls = []
         inputs = {}
+        is_creator_role_locked = is_edit and self.current_key == "usuarios" and self._is_branch_creator_user(item)
 
         for field in self.current_config["fields"]:
             if field.get("create_only") and is_edit:
@@ -814,7 +839,12 @@ class DashboardScreen:
                 continue
 
             initial = "" if not item else item.get(field["key"], "")
-            entry = self._create_input_entry(field, initial, is_edit)
+            entry = self._create_input_entry(
+                field,
+                initial,
+                is_edit,
+                disabled=field["key"] == "roll" and is_creator_role_locked,
+            )
             inputs[field["key"]] = entry
             controls.append(entry["view"])
 
@@ -844,7 +874,7 @@ class DashboardScreen:
 
         def submit(_):
             try:
-                payload = self._build_payload(inputs, is_edit)
+                payload = self._build_payload(inputs, is_edit, item)
                 if is_edit:
                     self.api.put(f"{self.current_config['endpoint']}/{item['id']}", payload)
                     self.feedback.value = "Registro actualizado correctamente."
@@ -1064,6 +1094,64 @@ class DashboardScreen:
 
         return "\n".join(lines)
 
+    def _generate_today_report(self):
+        # Collect today's sales from rows_cache
+        today = datetime.now().date()
+        ventas = []
+        # rows_cache contains rows for current entity; fetch ventas from API cache
+        if self.rows_cache:
+            # Ensure we're using ventas endpoint
+            for row in self.rows_cache:
+                fecha_dt = self._parse_iso_value(row.get('fecha'))
+                if fecha_dt and fecha_dt.date() == today:
+                    ventas.append(row)
+
+        total = sum(self._coerce_float(r.get('total')) for r in ventas)
+        total_desc = sum(self._coerce_float(r.get('totalDesc')) for r in ventas)
+
+        by_method = {}
+        for r in ventas:
+            metodo = (r.get('metodoPago') or 'SIN METODO').strip()
+            m = by_method.setdefault(metodo, {'total': 0.0, 'totalDesc': 0.0})
+            m['total'] += self._coerce_float(r.get('total'))
+            m['totalDesc'] += self._coerce_float(r.get('totalDesc'))
+
+        lines = []
+        lines.append(f'Informe de ventas - {today.strftime("%d/%m/%Y")}')
+        lines.append('')
+        lines.append(f'Total ventas: {self._format_value(total)}')
+        lines.append(f'Total con descuento: {self._format_value(total_desc)}')
+        lines.append('')
+        lines.append('Totales por metodo de pago:')
+        lines.append('Metodo de pago | Total | Total con descuento')
+        lines.append('-' * 60)
+        for metodo, vals in by_method.items():
+            lines.append(f"{metodo} | {self._format_value(vals['total'])} | {self._format_value(vals['totalDesc'])}")
+        lines.append('')
+        lines.append('Detalle de ventas:')
+        if ventas:
+            for r in ventas:
+                fecha = self._format_value(r.get('fecha'))
+                metodo = r.get('metodoPago') or ''
+                lines.append(
+                    f"ID: {r.get('id', '')} - Fecha: {fecha} - Metodo: {metodo} - Total: {self._format_value(r.get('total'))} - TotalDesc: {self._format_value(r.get('totalDesc'))}"
+                )
+        else:
+            lines.append('No hay ventas para hoy.')
+
+        try:
+            tmp = tempfile.gettempdir()
+            filename = os.path.join(tmp, f"informe_ventas_{today.strftime('%Y%m%d')}.txt")
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+            asyncio.create_task(self.page.launch_url(f"file:///{filename}"))
+            self.feedback.value = f"Informe generado: {filename}"
+            self.feedback.color = COLORS['success']
+        except Exception as exc:
+            self.feedback.value = f"Error generando informe: {exc}"
+            self.feedback.color = COLORS['danger']
+        self.page.update()
+
     def _detect_printers(self):
         if getattr(self.page, "web", False) or os.name != "nt":
             return []
@@ -1129,7 +1217,7 @@ class DashboardScreen:
         error = ft.Text("", size=12, color=COLORS["danger"])
         affect_stock = ft.Switch(
             label="Afectar stock",
-            value=True,
+            value=False,
             active_color=COLORS["success"],
         )
         selected_state = {"pedido_id": None}
@@ -1232,10 +1320,15 @@ class DashboardScreen:
         )
         self.page.show_dialog(dlg)
 
-    def _build_payload(self, inputs: dict, is_edit: bool):
+    def _build_payload(self, inputs: dict, is_edit: bool, item: dict | None = None):
+        role_locked = is_edit and self.current_key == "usuarios" and self._is_branch_creator_user(item)
         payload = {}
         for key, entry in inputs.items():
+            if role_locked and key == "roll":
+                continue
             field = entry["field"]
+            if field.get("client_only"):
+                continue
             value = entry["get_value"]()
             if field["type"] == "number":
                 if value in ("", None):
@@ -1255,12 +1348,16 @@ class DashboardScreen:
                 payload[key] = value
         return payload
 
-    def _create_input_entry(self, field: dict, initial, is_edit: bool):
+    def _create_input_entry(self, field: dict, initial, is_edit: bool, disabled: bool = False):
         if field["type"] == "select":
             control = ft.Dropdown(
                 label=field["label"],
                 value=initial,
-                options=[ft.dropdown.Option(option) for option in field["options"]],
+                options=[
+                    ft.dropdown.Option(text=option, key=option)
+                    for option in field["options"]
+                ],
+                disabled=disabled,
                 **input_style(as_dropdown=True),
             )
             return {
@@ -1282,6 +1379,7 @@ class DashboardScreen:
             min_lines=3 if field.get("multiline") else 1,
             max_lines=5 if field.get("multiline") else 1,
             keyboard_type=ft.KeyboardType.NUMBER if field["type"] == "number" else ft.KeyboardType.TEXT,
+            disabled=disabled,
             **input_style(),
         )
         return {
@@ -1646,11 +1744,13 @@ class DashboardScreen:
             return
         total_entry = inputs.get("total")
         total_desc_entry = inputs.get("totalDesc")
+        general_discount_entry = inputs.get("descuentoGeneral")
         if not total_entry or not total_desc_entry:
             return
 
         total_control = total_entry["control"]
         total_desc_control = total_desc_entry["control"]
+        general_discount_control = general_discount_entry["control"] if general_discount_entry else None
         state = {
             "manual_total": False,
             "manual_total_desc": False,
@@ -1664,21 +1764,27 @@ class DashboardScreen:
 
         total_control.on_change = mark_total_manual
         total_desc_control.on_change = mark_total_desc_manual
+        if general_discount_control is not None:
+            general_discount_control.on_change = lambda _: apply_totals(True)
 
         def apply_totals(force: bool = False):
-            calculated = self._calculate_relation_total(relation_state)
-            if calculated is None:
+            totals = self._calculate_relation_totals(relation_state)
+            if totals is None:
                 return
+            total = totals["total"]
+            total_desc = totals["totalDesc"]
+            if general_discount_control is not None:
+                general_discount = self._coerce_float(general_discount_control.value)
+                general_discount = max(0.0, min(100.0, general_discount))
+                total_desc = total_desc * (1 - general_discount / 100)
             if force or not state["manual_total"] or not total_control.value:
-                total_control.value = self._format_decimal_input(calculated)
+                total_control.value = self._format_decimal_input(total)
                 state["manual_total"] = False
             if force or not state["manual_total_desc"] or not total_desc_control.value:
-                total_desc_control.value = self._format_decimal_input(calculated)
+                total_desc_control.value = self._format_decimal_input(total_desc)
                 state["manual_total_desc"] = False
 
         if relation_state is not None:
-            # When products change inside pedidos/ventas, totals must be rebuilt
-            # from the current relation state instead of preserving stale manual edits.
             relation_state["on_change"] = lambda: apply_totals(True)
 
         helper = ft.Row(
@@ -1707,18 +1813,24 @@ class DashboardScreen:
         if relation_state is not None:
             apply_totals(True)
 
-    def _calculate_relation_total(self, relation_state: dict | None):
+    def _calculate_relation_totals(self, relation_state: dict | None):
         if not relation_state:
             return None
         total = 0.0
+        total_desc = 0.0
         has_items = False
         for related_item in relation_state["selected_items"].values():
             values = related_item.get("values", {})
             quantity = self._coerce_float(values.get("cantidad"))
             unit_price = self._coerce_float(related_item.get("unit_price", values.get("precio")))
-            total += quantity * unit_price
+            line_total = quantity * unit_price
+            discount = self._coerce_float(values.get("descuento"))
+            discount = max(0.0, min(100.0, discount))
+            line_total_desc = line_total * (1 - discount / 100)
+            total += line_total
+            total_desc += line_total_desc
             has_items = True
-        return total if has_items else 0.0
+        return {"total": total, "totalDesc": total_desc} if has_items else {"total": 0.0, "totalDesc": 0.0}
 
     def _parse_number(self, value, label: str):
         if isinstance(value, (int, float)):
@@ -1878,6 +1990,8 @@ class DashboardScreen:
                     rendered = self._format_value(self._coerce_float(raw_value))
                 elif field.get("format") == "quantity":
                     rendered = self._format_quantity_display(raw_value)
+                elif field.get("format") == "percent":
+                    rendered = f"{self._coerce_float(raw_value):.2f}%"
                 else:
                     rendered = str(raw_value)
                 lines.append(f"{field['label']}: {rendered}")
@@ -2014,6 +2128,21 @@ class DashboardScreen:
             return self._parse_number(raw_value, entry["config"]["label"])
         except ApiError:
             return None
+
+    def _is_branch_creator_user(self, item: dict | None):
+        if not item:
+            return False
+        creator_keys = (
+            "esCreadorSucursal",
+            "creador",
+            "is_creator",
+            "isCreadorSucursal",
+            "sucursalCreador",
+            "creator",
+            "created_by",
+        )
+        truthy_values = {True, 1, "1", "true", "True", "TRUE", "si", "SI", "Si", "sí", "Sí", "yes", "YES", "Yes"}
+        return any(item.get(key) in truthy_values for key in creator_keys)
 
     def _clear_filters(self):
         for entry in self.filter_inputs.values():
